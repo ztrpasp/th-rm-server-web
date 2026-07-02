@@ -1,0 +1,1001 @@
+#include "process/rm_pkt_process.h"
+#include "tables/rm_tables.h"
+#include "vendor/print.h"
+#include "packets/pkt.h"
+#include "packets/rte_CoLoR.h"
+#include "commandline/cli.h"
+
+int
+insert_cmp(sid_info_t *wait, sid_info_t *now)
+{
+    if(!wait || !now)
+        return 0;
+
+    if(wait->px < now->px)
+        return 1;
+    else
+        return -1;
+}
+
+void
+show_mark_t_array(mark_t *ans)
+{
+    if(!ans)
+        return;
+    int i, j;
+    ANN_unit_front_t *head;
+    for(i = 0; ; i++)
+    {
+        if(ans[i].unit_head == NULL)
+            break;
+        head = (ANN_unit_front_t *)(ans[i].unit_head);
+        cli_print("Pass: %s\n", ans[i].filtered ? "FILTERED" : "PASSED");
+        cli_print("Flag: %x\n", head->flag);
+        cli_print("N_SID: ");show_data(ans[i].N_pt, 16, false);cli_print("\n");
+        cli_print("L_SID: ");show_data(ans[i].L_pt, 20, false);cli_print("\n");
+        cli_print("NID: ");show_data(ans[i].nid_pt, 16, false);cli_print("\n");
+        cli_print("StrategyN: %d\n", head->strategy_num);
+        for(j = 0; j < head->strategy_num; j++)
+        {
+            cli_print("S_tag: %x S_len: %d\n", ans[i].strategy_pt[j].tag, ans[i].strategy_pt[j].len);
+        }
+    }
+}
+
+void
+show_px_unit_array(px_unit_t *ans)
+{
+    if(!ans)
+        return;
+    int i, j;
+    for(i = 0; ans[i].br_pt != NULL; i++)
+    {
+        cli_print("Forward to PX %x UNIT ", ans[i].px);
+        for(j = 0; (ans[i].unit_to_forward)[j] != 255; j++)
+        {
+            cli_print("%d ", (ans[i].unit_to_forward)[j]);
+        }
+        cli_print("\n");
+    }
+}
+
+uint16_t
+rm_ANN_get_last_px(void *pkt)
+{
+    if(!pkt)
+        return RM_ERR_NULL_PT_INPUT;
+    ANN_front_t *pt = (ANN_front_t *)pkt;
+    return *(uint16_t *)(pkt + pt->pkg_len - 2);
+}
+
+uint16_t *
+rm_ANN_get_px_pt(void *pkt)
+{
+    if(!pkt)
+        return NULL;
+    ANN_front_t *pt = (ANN_front_t *)pkt;
+    return (uint16_t *)(pkt + pt->pkg_len - GET_ANN_PX_NUM(pt->unit_px_num) * 2);
+}
+
+int
+rm_ANN_check_filter(ANN_front_t *head, mark_t *info_mark)
+{
+    if(!head || !info_mark)
+        return RM_ERR_NULL_PT_INPUT;
+
+    int check, px_num = GET_ANN_PX_NUM(head->unit_px_num);
+    uint8_t as_trace[32];
+    
+    // check N/L/nid legally
+    if(px_num == 0 && info_mark->nid_pt == NULL)
+    {
+        cli_print("The ANN packet is filtered: Inner-ANN without nid\n");
+        return 1;
+    }
+    if(info_mark->N_pt == NULL && info_mark->L_pt == NULL)
+    {
+        cli_print("The ANN packet is filtered: at least one NSID or LSID must exist\n");
+        return 1;
+    }
+    if(global_quick_check_strategy(STRATEGY_TRACE_EVERY_PKG) && px_num != 0)
+    {
+        // *(uint16_t *)(pkt + pt->pkg_len - 2);
+        cli_print("Start tracing\n");
+        check = graph_trace_px(my_as_info->as_graph, (void *)head + head->pkg_len - px_num * 2, px_num, as_trace);
+        if(check == 0)
+        {
+            cli_print("The ANN packet is filtered: illegal ANN path\n");
+            return 1;
+        }
+        // STATUS
+        my_as_info->my_status->ANN_stat.trace_res[as_trace[check - 1]]++;
+    }
+    return 0;
+}
+
+// parse ANN and store , mark ann_unit, ret number of ANN_unit
+int
+rm_ANN_parse_store(void *pkt, mark_t *mark_array, search_px_result_t *src_px_res)
+{
+    if(!pkt || !mark_array || !src_px_res)
+        return RM_ERR_NULL_PT_INPUT;
+    
+    void *pt, *N_sid, *L_sid, *nid, *value_pt;
+    sid_info_t *sid_mid;
+    br_info_t *br_mid;
+    proxy_info_t *proxy_mid;
+    strategy_t *st;
+    uint16_t last_px;
+    ANN_front_t *ann_front = (ANN_front_t *)pkt;
+    ANN_unit_front_t *unit_front;
+    uint8_t i, j, strategy_count, mark_n,
+            unit_count = GET_ANN_UNIT_NUM(ann_front->unit_px_num);
+
+    // check unit_count limit
+    if(unit_count > 32)
+    {
+        cli_print(RED "[!] Error: unit_count %d exceeds maximum limit of 32\n", unit_count);
+        cli_print(RESET "");
+        return RM_PROCESS_ERR;
+    }
+
+    // check the checksum
+    if(ANN_check_checksum(pkt) == 0)
+    {
+        cli_print(RED "[!] ERR: bad checksum\n");
+        cli_print(RESET "");
+        return RM_ERR_CHECKSUM_UNPASSED;
+    }
+
+    // get the last px
+    if(GET_ANN_PX_NUM(ann_front->unit_px_num) != 0)
+    {
+        last_px = rm_ANN_get_last_px(pkt);
+        // check and use px to get as and br
+        if(0 >= as_store_search_px(last_px, src_px_res))
+        {
+            cli_print(RED "[!] ERR: Unable to find the BR for PX %x\n", last_px);
+            cli_print(RESET "");
+            return RM_PROCESS_ERR;
+        }
+        // STATUS
+        my_as_info->my_status->ANN_stat.from_outside_count++;
+    }
+    else
+    {
+        // STATUS
+        my_as_info->my_status->ANN_stat.from_inside_count++;
+        src_px_res->target_as = NULL;
+        src_px_res->target_br = NULL;
+    }
+
+    // for every unit announced in ANN
+    for(i = 0, pt = pkt + sizeof(ANN_front_t); i < unit_count; i++)
+    {
+        unit_front = (ANN_unit_front_t *)pt;
+        pt += sizeof(ANN_unit_front_t);
+
+        // process N, L and nid
+        if(CHECK_ANN_UNIT_FLAG_N(unit_front->flag))
+        {
+            N_sid = pt;
+            pt += 16;
+        }
+        else
+            N_sid = NULL;
+        if(CHECK_ANN_UNIT_FLAG_L(unit_front->flag))
+        {
+            L_sid = pt;
+            pt += 20;
+        }
+        else
+            L_sid = NULL;
+        if(CHECK_ANN_UNIT_FLAG_I(unit_front->flag))
+        {
+            nid = pt;
+            pt += 16;
+        }
+        else
+            nid = NULL;
+
+        mark_array[i].unit_head = unit_front;
+        mark_array[i].N_pt = N_sid;
+        mark_array[i].L_pt = L_sid;
+        mark_array[i].nid_pt = nid;
+
+        // parse ann strategy part and mark
+        strategy_count = unit_front->strategy_num;
+        for(j = 0; j < strategy_count; j++)
+        {
+            // mark the strategy pt
+            mark_array[i].strategy_pt[j].tag = *(uint8_t *)pt;
+            mark_array[i].strategy_pt[j].len = *(uint8_t *)(pt + 1);
+            mark_array[i].strategy_pt[j].value = (uint8_t *)pt + 2;
+            pt += 2 + mark_array[i].strategy_pt[j].len;
+        }
+
+        // ### check and filter ANN_unit
+        if(1 == rm_ANN_check_filter(ann_front, mark_array + i))
+        {
+            mark_array[i].filtered = true;
+        }
+        else
+        {
+            mark_array[i].filtered = false;
+            uint8_t as_path_len = GET_ANN_PX_NUM(ann_front->unit_px_num);
+            // find the BR or PROXY node to initialize sid_node
+            if(GET_ANN_PX_NUM(ann_front->unit_px_num) == 0)
+            {
+                // use nid to find PROXY
+                proxy_mid = proxy_store_search(nid);
+                if(NULL == proxy_mid)
+                {
+                    cli_print(RED "[!] Error: Unable to find the Proxy for NID\n");
+                    cli_print(RESET "");
+                    return RM_PROCESS_ERR;
+                }
+                if(NULL == (sid_mid = sid_create(0, proxy_mid, 0)))
+                {
+                    cli_print(RED "[!] Error: SID CREATE ERROR\n");
+                    cli_print(RESET "");
+                    return RM_PROCESS_ERR;
+                }
+            }
+            else
+            {
+                if(NULL == (sid_mid = sid_create(last_px, src_px_res->target_br, as_path_len)))
+                {
+                    cli_print(RED "[!] Error: SID CREATE ERROR\n");
+                    cli_print(RESET "");
+                    return RM_PROCESS_ERR;
+                }
+            }
+
+            // insert strategy
+            for(j = 0; j < strategy_count; j++)
+            {
+                value_pt = (void *)rte_malloc(NULL, mark_array[i].strategy_pt[j].len, 0);
+                rte_memcpy(value_pt, mark_array[i].strategy_pt[j].value, mark_array[i].strategy_pt[j].len);
+                st = strategy_create(mark_array[i].strategy_pt[j].tag, mark_array[i].strategy_pt[j].len, value_pt);
+                sid_add_strategy(sid_mid, st);
+            }
+         
+            // insert into sid_table
+            // ### decide the priority of forwarding
+            int sid_store_insert_ret = sid_store_insert(N_sid, L_sid, sid_mid, insert_cmp);
+            if(0 > sid_store_insert_ret)
+            {
+                cli_print(RED "[!] Error: Unable to insert into sid_table\n");
+                cli_print(RESET "");
+                sid_info_destroy(sid_mid);
+                // mark the sid
+                mark_array[i].filtered = true;
+            }
+            else if(0 == sid_store_insert_ret)
+            {
+                cli_print("Not the shortest path, as a backup path, do not continue forwarding the ANN pak:\n");
+                cli_print("SID successfully added ");
+                cli_print("%s", (sid_mid->px == 0)? "from this domain" : "from other domain");
+                cli_print(" NSID = ");show_data(N_sid, 16, false);
+                cli_print(" LSID = ");show_data(L_sid, 20, false);cli_print("\n");
+                mark_array[i].filtered = true;
+            }
+            else // DEBUG
+            {
+                cli_print("SID successfully added ");
+                cli_print("%s", (sid_mid->px == 0)? "from this domain" : "from other domain");
+                cli_print(" NSID = ");show_data(N_sid, 16, false);
+                cli_print(" LSID = ");show_data(L_sid, 20, false);cli_print("\n");
+            }
+        }
+    }
+    // mark the end
+    if(i < 32)
+        mark_array[i].unit_head = NULL;
+
+    return RM_PROCESS_SUCCESS;
+}
+
+// input pkg and mark_array, return numbers of px and the units needed forwarded
+int
+rm_ANN_forward_px_units(void *pkt, mark_t *mark_array, search_px_result_t *src_px_res, px_unit_t *px_unit_array)
+{
+    if(!pkt || !mark_array || !src_px_res || !px_unit_array)
+        return RM_ERR_NULL_PT_INPUT;
+
+    ANN_front_t *front = (ANN_front_t *)pkt;
+    as_info_t *as_pt;
+    uint16_t px_mid = 0x0;
+    connect_info_t *con_pt;
+    void *as_pt_start = as_store.as_array->data;
+    void *connect_pt_start;
+    int i, j, k, px_n, un_n, s_i,
+        unit_count = GET_ANN_UNIT_NUM(front->unit_px_num),
+        as_c = as_store.as_array->count, as_s = sizeof(as_info_t),
+        con_c, con_s = sizeof(connect_info_t);
+    
+    // check for NULL pointer
+    if(as_pt_start == NULL || as_c == 0)
+        return 0;
+    
+    // for every AS to decide what units should be forwarded to which px
+    for(i = 0, px_n = 0; i < as_c; i++)
+    {
+        as_pt = (as_info_t *)(as_pt_start + as_s * i);
+        
+        // ### decide if send ANN to this as
+        if(src_px_res->target_as && src_px_res->target_as->aid == as_pt->aid)
+            continue;
+        if(global_quick_check_strategy(STRATEGY_AS_SECURITY_CHECK))
+        {
+            cli_print("Checking AS security level: AS%d to AS%d; security level: %d to %d, ",
+                my_as_info->aid, as_pt->aid, my_as_info->security_level, as_pt->security_level);
+            if(my_as_info->security_level > as_pt->security_level) {
+                cli_print("not allowed\n");
+                continue;
+            } else {
+                cli_print("ok\n");
+            }
+        }
+
+        // ### decide target px, use the first px by default
+        con_c = as_pt->connect_array->count;
+        if(con_c == 0)
+            continue;
+        connect_pt_start = as_pt->connect_array->data;
+        px_mid = 0;
+        for(k = 0; k < con_c; k++)
+        {
+            con_pt = (connect_info_t *)(connect_pt_start + k * con_s);
+            if(con_pt->px_array->count > 0 && con_pt->px_array->data != NULL)
+            {
+                px_mid = *(uint16_t *)(con_pt->px_array->data); // just use the first px
+                if(px_mid > 0)
+                    break;
+            }
+        }
+        if(con_pt->br_pt == NULL || px_mid == 0)
+            continue;
+        px_unit_array[px_n].br_pt = con_pt->br_pt;
+        px_unit_array[px_n].px = px_mid;
+
+        // ### LOOP to decide which units to send
+        for(j = 0, un_n = 0; j < unit_count; j++)
+        {
+            bool unit_filter = mark_array[j].filtered;
+            
+            // # decide if forward the unit
+            for(s_i = 0; unit_filter == false && s_i < 32; s_i++)
+            {
+                switch(mark_array[j].strategy_pt[s_i].tag)
+                {
+                    // end of Strategy
+                    case 0:
+                    {
+                        s_i = 32;
+                        break;
+                    }
+                    // S1 : Security level
+                    case STRATEGY_SECURITY_LEVEL:
+                    {
+                        if(!global_quick_check_strategy(STRATEGY_SECURITY_LEVEL_CHECK))
+                            break;
+                        uint8_t sl = *(uint8_t *)(mark_array[j].strategy_pt[s_i].value);
+                        cli_print("AS%d security level is %d, require %d\n", as_pt->aid, as_pt->security_level, sl);
+                        if(sl > as_pt->security_level)
+                        {
+                            unit_filter = true;
+                            cli_print("The ANN packet is filtered: the security level of AS %d is too low\n", as_pt->aid);
+                        }
+                        break;
+                    }
+                    // S2 : the ROAD / white list
+                    case STRATEGY_ANNOUNCE_PATH:
+                    {
+                        if(!global_quick_check_strategy(STRATEGY_ANNOUNCE_PATH))
+                            break;
+                        uint8_t road_i, road_limi = mark_array[j].strategy_pt[s_i].len,
+                                *road_data = mark_array[j].strategy_pt[s_i].value;
+                        cli_print("Checking AS path\n");
+                        // loop to check the list
+                        for(road_i = 0; road_i < road_limi; road_i++)
+                        {
+                            if(road_data[road_i] == as_pt->aid)
+                                break;
+                        }
+                        if(road_limi == road_i)
+                        {
+                            cli_print("The ANN packet is filtered: AS %d not in the list\n", as_pt->aid);
+                            unit_filter = true;
+                        }
+                        break;
+                    }
+                    default:break;
+                }
+            }
+
+            // add this unit to px
+            if(unit_filter == false)
+                px_unit_array[px_n].unit_to_forward[un_n++] = j;
+            
+        }
+        // mark the end of unit array
+        if(un_n != 0)
+            px_unit_array[px_n++].unit_to_forward[un_n] = 255;
+    }
+    // mark the end of px_units array
+    px_unit_array[px_n].br_pt = NULL;
+
+    return px_n;
+}
+
+// construct ANNs
+int
+rm_ANN_construct_ann(void *pkt, mark_t *mark_array, px_unit_t *px_units, void *ann_buf[32])
+{
+    if(!pkt || !mark_array || !px_units)
+        return RM_ERR_NULL_PT_INPUT;
+    
+    int i, j, k, index, num;
+    uint8_t ubuf[128];
+    void *apt;
+    mark_t *mpt;
+    ANN_front_t *ans_head, *old_head = (ANN_front_t *)pkt;
+    for(i = 0; ; i++)
+    {
+        if(px_units[i].br_pt == NULL)
+            break;
+
+        apt = ann_buf[i];
+        ANN_init(apt);
+
+        for(j = 0; ; j++)
+        {
+            index = px_units[i].unit_to_forward[j];
+            if(index == 255)
+                break;
+            mpt = mark_array + index;
+            
+            // ### modify unit
+            if(global_quick_check_strategy(STRATEGY_N_SID_FIELD_OMIT))
+                mpt->N_pt = NULL;
+            if(global_quick_check_strategy(STRATEGY_L_SID_FIELD_OMIT))
+                mpt->L_pt = NULL;
+            if(mpt->N_pt == NULL && mpt->L_pt == NULL)
+                continue;
+            if(global_quick_check_strategy(STRATEGY_NID_FIELD_OMIT))
+                mpt->nid_pt = NULL;
+            ANN_unit_construct(ubuf, mpt->N_pt, mpt->L_pt, mpt->nid_pt);
+            
+            // ### choose and modify strategy
+            num = ((ANN_unit_front_t *)mpt->unit_head)->strategy_num;
+            for(k = 0; k < num; k++)
+            {
+                ANN_unit_append_strategy(ubuf, mpt->strategy_pt[k].tag, 
+                                            mpt->strategy_pt[k].len, mpt->strategy_pt[k].value);
+            }
+            ANN_append_unit(apt, ubuf);
+        }
+
+        // append px
+        num = GET_ANN_PX_NUM(old_head->unit_px_num);
+        uint16_t *ut = rm_ANN_get_px_pt(pkt);
+        for(j = 0; j < num; j++)
+            ANN_append_px(apt, ut[j]);
+        ANN_append_px(apt, px_units[i].px);
+
+        // update head info
+        ans_head = (ANN_front_t *)apt;
+        ans_head->ttl = old_head->ttl - 1;
+
+        ANN_update_checksum(apt);
+    }
+
+    return i;
+}
+
+sid_info_t *
+rm_GET_search(void *pkt)
+{
+    if(!pkt)
+        return NULL;
+
+    GET_front_t *get_head = (GET_front_t *)pkt;
+    sid_table_node_t *sid_node;
+
+    // search sid table
+    if((sid_node = sid_store_search(get_head->N_sid, get_head->L_sid)) != NULL)
+    {
+        return sid_node->sid_info_list;
+    }
+    else
+        return NULL;
+}
+
+static int
+rm_GET_get_source_asid(void *pkt, uint32_t *source_asid)
+{
+    if(!pkt || !source_asid)
+        return RM_ERR_NULL_PT_INPUT;
+
+    GET_front_t *get_pt = (GET_front_t *)pkt;
+    uint8_t as_trace[32];
+    int trace_count;
+
+    if(get_pt->PID_num == 0)
+    {
+        *source_asid = (uint32_t)my_as_info->aid;
+        return RM_PROCESS_SUCCESS;
+    }
+
+    trace_count = graph_trace(my_as_info->as_graph, pkt + sizeof(GET_front_t), get_pt->PID_num, as_trace);
+    if(trace_count <= 0)
+        return RM_PROCESS_ERR;
+
+    *source_asid = (uint32_t)as_trace[trace_count - 1];
+    return RM_PROCESS_SUCCESS;
+}
+
+int
+rm_GET_check_filter(void *pkt, sid_info_t *search_res)
+{
+    if(!pkt || !search_res)
+        return RM_ERR_NULL_PT_INPUT;
+    
+    int i, count, size, j, k, p_check = 0;
+    void *s_data;
+    strategy_t *gt;
+    uint8_t as_trace[32];
+    uint16_t px;
+    GET_front_t *get_pt = (GET_front_t *)pkt;
+    search_px_result_t res_br;
+    
+    if(get_pt->PID_num != 0)
+    {
+        px = (uint16_t)((*(uint32_t *)(pkt + (get_pt->pkg_len - 4))) >> 16);
+        if(1 != as_store_search_px(px, &res_br))
+            return 1;
+
+        if(global_quick_check_strategy(STRATEGY_TRACE_EVERY_PKG))
+        {
+            p_check = graph_trace(my_as_info->as_graph, pkt + sizeof(GET_front_t), get_pt->PID_num, as_trace);
+            if(p_check == 0)
+            {
+                cli_print("The GET packet is filtered: illegal path\n");
+                return 1;
+            }
+            // STATUS
+            my_as_info->my_status->GET_stat.trace_res[as_trace[p_check - 1]]++;
+        }
+    }
+    else
+        px = 0;
+
+    // parse SID's strategies
+    if(search_res->strategy_array == NULL || search_res->strategy_array->data == NULL)
+        return 0;
+    s_data = search_res->strategy_array->data;
+    count = search_res->strategy_array->count;
+    size = search_res->strategy_array->element_size;
+    if(count <= 0)
+        return 0;
+    for(i = 0; i < count; i++)
+    {
+        gt = (strategy_t *)(s_data + i * size);
+        switch(gt->tag)
+        {
+            case STRATEGY_SECURITY_LEVEL:
+            {
+                if(px != 0 && global_quick_check_strategy(STRATEGY_SECURITY_LEVEL_CHECK))
+                {
+                    uint8_t sid_secu = *(uint8_t *)(gt->value);
+                    if(res_br.target_as->security_level < sid_secu)
+                        return 1;
+                }
+                break;
+            }
+            case STRATEGY_ANNOUNCE_PATH:
+            {
+                if(px != 0 && global_quick_check_strategy(STRATEGY_ANNOUNCE_PATH_CHECK))
+                {
+                    if(get_pt->PID_num == 0)
+                        break;
+                    // get the list of AS being passed
+                    if(p_check == 0)
+                        p_check = graph_trace(my_as_info->as_graph, pkt + sizeof(GET_front_t), get_pt->PID_num, as_trace);
+                    if(p_check == 0)
+                    {
+                        cli_print("The GET packet is filtered: illegal path\n");
+                        return 1;
+                    }
+                    else
+                    {
+                        cli_print("GET Path: 3 -> ", my_as_info->aid);
+                        for(j = 0; j < p_check; j++)
+                        {
+                            cli_print("%d -> ", as_trace[j]);
+                            // check the white list
+                            for(k = 0; k < gt->len; k++)
+                            {
+                                if(as_trace[j] == *(uint8_t *)(gt->value + k))
+                                    break;
+                            }
+                            if(k == gt->len)
+                            {
+                                cli_print(" The GET packet is filtered: illegal path\n");
+                                return 1;
+                            }
+                        }
+                        cli_print("\n");
+                    }
+                }
+                break;
+            }
+            default:;
+        }
+    }
+
+    // check global strategies
+    if(px != 0 && global_quick_check_strategy(STRATEGY_AS_SECURITY_CHECK))
+    {
+        if(res_br.target_as->security_level < my_as_info->security_level)
+            return 1;
+    }
+    
+    // not filtered
+    return 0;
+}
+
+int
+rm_GET_process(void *pkt, sid_info_t **node_pt, struct rte_ipv4_hdr *ip_layer_pt, struct lcore_conf *qconf)
+{
+    if(!pkt || !node_pt || !ip_layer_pt || !qconf)
+        return RM_ERR_NULL_PT_INPUT;
+
+    uint8_t buf[256], len;
+    GET_front_t *get_pt = (GET_front_t *)pkt;
+    sid_info_t *search_node;
+    uint32_t acl_match_id = 0;
+    uint32_t source_asid = 0;
+
+    // checksum check
+    if(GET_check_checksum(pkt) == 0)
+    {
+        cli_print("ERR: checksum failure\n");
+        return RM_ERR_CHECKSUM_UNPASSED;
+    }
+
+    // search SID table
+    search_node = rm_GET_search(pkt);
+
+    // unable to find the info
+    if(!search_node)
+    {
+        GET_front_t *get_head = (GET_front_t *)pkt;
+        int zero_flag = 1;
+        for(int u = 0; u < 16; u++)
+        {
+            if(get_head->N_sid[u] != 0)
+            {
+                zero_flag = 0;
+                break;
+            }
+        }
+        for(int u = 0; u < 20; u++)
+        {
+            if(get_head->L_sid[u] != 0)
+            {
+                zero_flag = 0;
+                break;
+            }
+        }
+        if(zero_flag)//全0sid说明proxy正在向RM请求SID列表
+        {
+            cli_print("Returning SID-Lists to proxy\n");
+            struct rte_ether_addr port_mac_addr;
+            uint8_t dst_port = 0;//目前RM只有port0
+            uint32_t src_ip = my_as_info->port_ip[dst_port];
+            uint32_t dst_ip = rte_cpu_to_be_32(ip_layer_pt->src_addr);
+            rte_eth_macaddr_get(dst_port, &port_mac_addr);
+
+            int total = g_tsid_table.count;
+            // check if there are any SIDs
+            if(total == 0)
+                return RM_RETURN_SID_LIST;
+                
+            // check sid_list pointer
+            if(g_tsid_table.sid_list == NULL)
+                return RM_RETURN_SID_LIST;
+                
+            for(int i = 0; i < total; i = i + 10)//todo:定义一个宏取代10
+            {
+                void *pkt_buf = rte_malloc(NULL, 512, 0);
+                if(!pkt_buf)
+                {
+                    cli_print(RED "[!] pkt_buf 分配失败\n");
+                    cli_print(RESET "");
+                    continue;
+                }
+                
+                int num_to_copy = 10;
+                if(i + 10 > total)
+                {
+                    num_to_copy = total - i;
+                }
+                
+                uint8_t *con_buf = rte_malloc(NULL, num_to_copy * SID_LEN, 0);
+                if(!con_buf)
+                {
+                    cli_print(RED "[!] sid list ctrl分配失败\n");
+                    cli_print(RESET "");
+                    rte_free(pkt_buf);
+                    continue;
+                }
+
+                for(int j = 0; j < num_to_copy; j++)
+                {
+                    memcpy(con_buf + j * SID_LEN, g_tsid_table.sid_list[i + j].tsid, SID_LEN);
+                }
+
+                CONTROL_init(pkt_buf, CONTROL_SID_LIST, num_to_copy * SID_LEN, con_buf);
+                CONTROL_update_checksum(pkt_buf);
+                rm_send_new_ip_pkt(qconf, pkt_buf, CoLoR_get_pkg_length(pkt_buf),
+					src_ip, dst_ip, port_mac_addr.addr_bytes, dst_port);
+
+                rte_free(pkt_buf);
+                rte_free(con_buf);
+            }
+            return RM_RETURN_SID_LIST;
+
+        }
+
+        cli_print("Error: cannot find SID\n");
+        
+        // Presentation: as 1 add attacker function
+        if(my_as_info->aid != 1)
+            return RM_GET_SID_UNFOUND;
+
+        // check if as_array is empty
+        if(as_store.as_array->count == 0)
+            return RM_GET_SID_UNFOUND;
+        
+        search_node = (sid_info_t *)rte_malloc(NULL, sizeof(sid_info_t), 0);
+        if(!search_node)
+            return RM_GET_SID_UNFOUND;
+            
+        // forward to the first br of the first as
+        as_info_t *apt = (as_info_t *)(as_store.as_array->data);
+        // check if connect_array is empty
+        if(apt->connect_array->count == 0)
+        {
+            rte_free(search_node);
+            return RM_GET_SID_UNFOUND;
+        }
+        
+        connect_info_t *cpt = (connect_info_t *)(apt->connect_array->data);
+        // check if br_pt is NULL or px_array is empty or data is NULL
+        if(cpt->br_pt == NULL || cpt->px_array->count == 0 || cpt->px_array->data == NULL)
+        {
+            rte_free(search_node);
+            return RM_GET_SID_UNFOUND;
+        }
+        
+        search_node->node_pt = cpt->br_pt;
+        search_node->px = *(uint16_t *)cpt->px_array->data;
+        search_node->strategy_array = NULL;
+        search_node->next = NULL;
+    }
+
+    uint8_t acl_sid[RM_ACL_SID_LEN];
+    rte_memcpy(acl_sid, get_pt->N_sid, COLOR_N_SID_LEN);
+    rte_memcpy(acl_sid + COLOR_N_SID_LEN, get_pt->L_sid, COLOR_L_SID_LEN);
+    if (rm_GET_get_source_asid(pkt, &source_asid) != RM_PROCESS_SUCCESS)
+    {
+        my_as_info->my_status->GET_stat.filtered_count++;
+        char acl_msg[128];
+        snprintf(acl_msg, sizeof(acl_msg), "GET denied by ACL: unable to identify source AS\r\n");
+        rm_cli_notify(acl_msg);
+        cli_print("%s", acl_msg);
+        return RM_GET_FILTERED;
+    }
+    if (rm_acl_check_get(acl_sid, source_asid, get_pt->nid, &acl_match_id) == 0)
+    {
+        my_as_info->my_status->GET_stat.filtered_count++;
+        char acl_msg[128];
+        snprintf(acl_msg, sizeof(acl_msg), "GET denied by ACL rule %u, source_asid=0x%08x\r\n",
+            acl_match_id, source_asid);
+        rm_cli_notify(acl_msg);
+        cli_print("%s", acl_msg);
+        return RM_GET_FILTERED;
+    }
+    
+    // ### check and filter GET
+    if(rm_GET_check_filter(pkt, search_node) == 1)
+    {
+        cli_print("The GET packet is filtered\n");
+        return RM_GET_FILTERED;
+    }
+
+
+    // STATUS
+	if(get_pt->PID_num == 0)
+        my_as_info->my_status->GET_stat.from_inside_count++;
+    else
+        my_as_info->my_status->GET_stat.from_outside_count++;
+
+    // update pkg info
+    // 提供者在本域内，不计算PID
+    if(search_node->px == 0)
+    {
+        get_pt->ttl -= 1;
+        GET_update_checksum(pkt);
+    }
+    // 提供者在其他域，计算PID
+    else
+    {
+        get_pt->ttl -= 1;
+        // calculate PID and append
+        GET_append_pid(pkt, GET_calculate_PID(pkt, my_as_info->sk, search_node->px));
+        GET_update_checksum(pkt);
+    }
+    *node_pt = search_node;
+    return RM_PROCESS_SUCCESS;
+
+}
+
+int
+rm_CONTROL_process(void *pkt, int from_port)
+{
+    if(!pkt)
+        return RM_ERR_NULL_PT_INPUT;
+    else if(CONTROL_check_checksum(pkt) == 0)
+    {
+        cli_print("Bad checksum of CONTROL packet\n");
+        return RM_ERR_CHECKSUM_UNPASSED;
+    }
+
+    int as_num, br_num, px_num, i, j, k, br_buf_count, br_n;
+    as_info_t *as_mid;
+    connect_info_t *con_mid;
+    CONTROL_front_t *con_pt = (CONTROL_front_t *)pkt;
+    br_info_t br_mid;
+    
+    void *pt = pkt + con_pt->header_len;
+    void *ept = pt + con_pt->len;
+    parse_br_buf_t br_buf[128];
+    cli_print("Get the tag %d\n", con_pt->tag);
+    switch(con_pt->tag) // use flag
+    {
+        case CONTROL_CONFIG_RM:
+        {
+            cli_print("Receive a CONTROL for RM-config\n");
+            
+            clear_syn_rm_config();
+            
+            // base as-info
+            uint8_t *nid = pt;
+            uint32_t asid = *(uint32_t *)(pt + 16);
+            uint8_t security_level = *(uint8_t *)(pt + 20);
+            uint32_t sk = *(uint32_t *)(pt + 21);
+            global_set_as_info(pt, asid, security_level, sk); // sk
+
+            // br_list
+            br_num = *(uint8_t *)(pt + 25); // br count
+            pt += 26;
+            for(br_buf_count = 0; br_buf_count < br_num; br_buf_count++)
+            {
+                rte_memcpy(br_mid.nid, pt + 1, 16); // br: nid
+                br_mid.ip_addr = *(uint32_t *)(pt + 17); // br: ip
+                br_mid.port = from_port;
+                br_store_insert(&br_mid);
+                br_buf[br_buf_count].br_n = *(uint8_t *)pt; // br: id
+                br_buf[br_buf_count].br_info_pt = br_store_search(br_mid.nid);
+                pt += 21;
+            }
+
+            as_num = *(uint8_t *)pt++;
+            for(i = 0; i < as_num; i++) {
+                uint32_t asid = *(uint32_t *)pt;
+                uint8_t security_level = *(uint8_t *)(pt + 4);
+                as_mid = as_info_create(asid, security_level);
+                as_store_insert(as_mid);
+                pt += 5;
+            }
+
+            px_num = *(uint8_t *)pt++;
+            for (i = 0; i < px_num; i++) {
+                uint32_t asid = *(uint32_t *)pt;
+                uint8_t br_n = *(uint8_t *)(pt + 4);
+                uint8_t prefix_length = *(uint8_t *)(pt + 5); // TODO: currently PX is 16-bit 
+                uint32_t px = *(uint32_t *)(pt + 6);
+                as_mid = as_store_search_aid(asid);
+                for (j = 0; j < br_buf_count; j++) { // find br
+                    if (br_buf[j].br_n == br_n) {
+                        break;
+                    }
+                }
+                if(j == br_buf_count) {
+                    cli_print("Config failed: bad format\n");
+                    return RM_PARSE_ERR_FORMAT;
+                }
+                con_mid = connect_info_create(br_buf[j].br_info_pt);
+                connect_info_insert(con_mid, (uint16_t)(px >> 16));  // TODO: currently PX is 16-bit 
+                as_info_insert(as_mid, con_mid);
+                pt += 10;
+            }
+
+            return CONTROL_CONFIG_RM;
+        }
+        case CONTROL_REG_PROXY:
+        {
+            cli_print("Receive a CONTROL for Proxy REG\n");
+            proxy_info_t ans;
+            ans.port = from_port;
+            ans.ip_addr = *(uint32_t *)pt;
+            rte_memcpy(ans.nid, pt + 4, 16);
+            // STATUS
+            my_as_info->my_status->proxy_stat.register_count++;
+            cli_print(" IP: %x; port: %d; result: %s\n", ans.ip_addr, ans.port, proxy_store_insert(&ans) == 1 ? "ok" : "failed");
+            return CONTROL_REG_PROXY;
+        }
+        case CONTROL_GLOBAL_TOPOLOGY_INFO:
+        {
+            uint8_t aid1, aid2;
+            uint16_t px;
+            graph_clear(my_as_info->as_graph);
+            my_as_info->as_graph = graph_create(my_as_info->aid);
+            for(; pt != ept; )
+            {
+                aid1 = *(uint8_t *)(pt);
+                aid2 = *(uint8_t *)(pt + 1);
+                px = *(uint16_t *)(pt + 2);
+                graph_add(my_as_info->as_graph, aid1, aid2, px);
+                pt += 4;
+            }
+            return CONTROL_GLOBAL_TOPOLOGY_INFO;
+        }
+        case CONTROL_STRATEGY_GLOBAL: // t l (st sl sv)
+        {
+            uint8_t s_tag;
+            s_tag = *(uint8_t *)pt;
+            cli_print("Get the stag %d value %d\n", s_tag, *(uint8_t *)(pt + 3));
+            switch(s_tag)
+            {
+                case STRATEGY_SECURITY_LEVEL_CHECK:
+                case STRATEGY_ANNOUNCE_PATH_CHECK:
+                case STRATEGY_DATA_LEAKAGE_CHECK:
+                case STRATEGY_AS_SECURITY_CHECK:
+                case STRATEGY_N_SID_FIELD_OMIT:
+                case STRATEGY_L_SID_FIELD_OMIT:
+                case STRATEGY_NID_FIELD_OMIT:
+                case STRATEGY_TRACE_EVERY_PKG:
+                {
+                    // set quick mark
+                    if(1 == *(uint8_t *)(pt + 3))
+                    {
+                        cli_print("Tag %d ON\n", s_tag);
+                        global_quick_set_strategy(s_tag, true);
+                    }
+                    else
+                    {
+                        cli_print("Tag %d OFF\n", s_tag);
+                        global_quick_set_strategy(s_tag, false);
+                    }
+                    // add the strategy
+                    global_add_strategy(s_tag, *(uint16_t *)(pt + 1), (pt + 3));
+                    break;
+                }
+                default:;
+            }
+            return CONTROL_STRATEGY_GLOBAL;
+        }
+        case STAT_ANN_INFO:
+            return STAT_ANN_INFO;
+        case STAT_GET_INFO:
+            return STAT_GET_INFO;
+        case STAT_PROXY_INFO:
+            return STAT_PROXY_INFO;
+        default:
+            return CONTROL_UNKNOWN_TAG;
+    }
+}
