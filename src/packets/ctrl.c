@@ -2,35 +2,36 @@
 // Created by lcf2001523@gmail.com on 25-5-16.
 //
 #include "packets/ctrl.h"
-#include "commandline/cli.h"
+#include "telemetry/rm_log.h"
+#include "telemetry/rm_metrics.h"
 
 void
 process_control_packet(struct rte_mbuf *m, uint8_t portid, struct lcore_conf *qconf)
 {
-	CLR_SCREEN();
-	cli_print(YELLOW " $$$$$$\\  $$$$$$$$\\ $$$$$$$\\  $$\\       \n");
-	cli_print(YELLOW "$$  __$$\\ \\__$$  __|$$  __$$\\ $$ |      \n");
-	cli_print(YELLOW "$$ /  \\__|   $$ |   $$ |  $$ |$$ |      \n");
-	cli_print(YELLOW "$$ |         $$ |   $$$$$$$  |$$ |      \n");
-	cli_print(YELLOW "$$ |         $$ |   $$  __$$< $$ |      \n");
-	cli_print(YELLOW "$$ |  $$\\    $$ |   $$ |  $$ |$$ |      \n");
-	cli_print(YELLOW "\\$$$$$$  |   $$ |   $$ |  $$ |$$$$$$$$\\ \n");
-	cli_print(YELLOW " \\______/    \\__|   \\__|  \\__|\\________|\n");
-	cli_print(RESET ""); 
-	cli_print("Receive a CONTROL packet\n");
+	rm_metrics_record_rx(RM_PACKET_CONTROL);
 	// process CONCROL
 	struct rte_ipv4_hdr *ip_layer_pt = (struct rte_ipv4_hdr *)rte_pktmbuf_mtod_offset(m, struct rte_ipv4_hdr *, sizeof(struct rte_ether_hdr));
 	uint8_t *pkt_data = rte_pktmbuf_mtod_offset(m, uint8_t *, sizeof(struct rte_ether_hdr) + sizeof(struct rte_ipv4_hdr));
-	switch(rm_CONTROL_process(pkt_data, portid))
+	int control_result = rm_CONTROL_process(pkt_data, portid);
+	if (control_result < 0) {
+		rm_metrics_record_result(RM_PACKET_CONTROL,
+			control_result == RM_ERR_CHECKSUM_UNPASSED ?
+			RM_PACKET_RESULT_BAD_CHECKSUM : RM_PACKET_RESULT_MALFORMED);
+		rte_pktmbuf_free(m);
+		return;
+	}
+	rm_packet_result_t packet_result =
+		control_result == CONTROL_UNKNOWN_TAG ?
+		RM_PACKET_RESULT_UNKNOWN : RM_PACKET_RESULT_OK;
+	switch(control_result)
 	{
 		case CONTROL_CONFIG_RM:
 		{
-			cli_print("[debug] received a CONTROL_CONFIG_RM");
-			as_store_show();
-			basic_info_show();
 			store_control_rm_config("./config_recieve_file", pkt_data);
 			send_config_br(qconf);
 			send_control_config_rm_ack(portid, rte_cpu_to_be_32(ip_layer_pt->src_addr), qconf); // todo cpu_to_be??
+			RM_LOG_INFO(RM_LOG_MODULE_CONTROL, RM_EVENT_CONTROL_CONFIG_APPLIED,
+				portid, "RM configuration applied");
 			break;
 		}
 		case CONTROL_REG_PROXY:
@@ -39,6 +40,14 @@ process_control_packet(struct rte_mbuf *m, uint8_t portid, struct lcore_conf *qc
 			uint8_t *pkt_buf = rte_malloc(NULL, 512, 0);
 			uint8_t *con_data = rte_malloc(NULL, 512, 0);
 			uint8_t *pt;
+			if (pkt_buf == NULL || con_data == NULL) {
+				rte_free(pkt_buf);
+				rte_free(con_data);
+				packet_result = RM_PACKET_RESULT_NO_MEMORY;
+				RM_LOG_ERROR(RM_LOG_MODULE_CONTROL, RM_EVENT_RESOURCE_EXHAUSTED,
+					portid, "unable to allocate proxy registration response");
+				break;
+			}
 
 			CONTROL_front_t *con_pt = (CONTROL_front_t *)pkt_data;
 			uint32_t reg_ip = *(uint32_t *)(pkt_data + con_pt->header_len);
@@ -49,9 +58,7 @@ process_control_packet(struct rte_mbuf *m, uint8_t portid, struct lcore_conf *qc
 			// ret config to reg proxy
 			// construct nid-ip list
 			// num [NID IP]n
-			cli_print("Start sending PROXY_RET\n");
 			int num_proxy = proxy_store_ret_node_list(proxy_buf);
-			cli_print("Read %d proxy node\n", num_proxy);
 			*con_data = num_proxy;
 			pt = con_data + 1;
 			for(int i = 0; i < num_proxy; i++)
@@ -63,7 +70,6 @@ process_control_packet(struct rte_mbuf *m, uint8_t portid, struct lcore_conf *qc
 			// construct px-ip list
 			// num [PX IP]n
 			int num_path = as_store_ret_as_px_ip_list(pkt_buf);
-			cli_print("Read %d as-px-ip list\n", num_path);
 			*pt++ = num_path;
 			for(int i = 0; i < num_path; i++)
 			{
@@ -94,7 +100,6 @@ process_control_packet(struct rte_mbuf *m, uint8_t portid, struct lcore_conf *qc
 			// SYN proxy config to other proxys
 			// IP NID
 			// int num_proxy = proxy_store_ret_node_list(proxy_buf);
-			cli_print("Start sending PROXY_SYN to %d proxy\n", num_proxy);
 			for(int i = 0; i < num_proxy; i++)
 			{
 				if(reg_ip == proxy_buf[i]->ip_addr)
@@ -111,7 +116,6 @@ process_control_packet(struct rte_mbuf *m, uint8_t portid, struct lcore_conf *qc
 			// SYN proxy config to BRs
 			// IP NID
 			int num_br = br_store_ret_node_list(br_buf);
-			cli_print("Start sending PROXY_SYN to %d br\n", num_br);
 			for(int i = 0; i < num_br; i++)
 			{
 				uint8_t dst_port = br_buf[i]->port;
@@ -129,39 +133,26 @@ process_control_packet(struct rte_mbuf *m, uint8_t portid, struct lcore_conf *qc
 		}
 		case CONTROL_STRATEGY_GLOBAL:
 		{
-			cli_print("Returning CONTROL_STRATEGY_GLOBAL_ACK to sender\n");
-			break;
-			struct rte_ether_addr port_mac_addr_ret;
-
-			uint8_t dst_port = portid;
-			uint32_t src_ip = my_as_info->port_ip[dst_port];
-			uint32_t dst_ip = rte_cpu_to_be_32(ip_layer_pt->src_addr);
-			rte_eth_macaddr_get(dst_port, &port_mac_addr_ret);
-
-			void *pkt_buf = rte_malloc(NULL, 128, 0);
-			uint8_t con_buf;
-
-			con_buf = ACK_SUCCESS;
-			CONTROL_init(pkt_buf, CONTROL_STRATEGY_GLOBAL_ACK, 1, con_buf);
-			CONTROL_update_checksum(pkt_buf);
-
-			rm_send_new_ip_pkt(qconf, pkt_buf, CoLoR_get_pkg_length(pkt_buf),
-					src_ip, dst_ip, port_mac_addr_ret.addr_bytes, dst_port);
-
-			rte_free(pkt_buf);
 			break;
 		}
 		case CONTROL_GLOBAL_TOPOLOGY_INFO:
 		{
-			cli_print("Receive a global topology info\n");
-			graph_show(my_as_info->as_graph);
+			RM_LOG_INFO(RM_LOG_MODULE_CONTROL, RM_EVENT_CONTROL_CONFIG_APPLIED,
+				portid, "global topology updated");
 			break;
 		}
 		case STAT_ANN_INFO:
 		{
 			void *pkt_buf = rte_malloc(NULL, 512, 0);
 			void *con_data = rte_malloc(NULL, 512, 0);
-			struct rte_ether_addr port_mac_addr_ret;
+			if (pkt_buf == NULL || con_data == NULL) {
+				rte_free(pkt_buf);
+				rte_free(con_data);
+				packet_result = RM_PACKET_RESULT_NO_MEMORY;
+				RM_LOG_ERROR(RM_LOG_MODULE_CONTROL, RM_EVENT_RESOURCE_EXHAUSTED,
+					portid, "unable to allocate ANN status response");
+				break;
+			}
 
 			uint8_t dst_port = portid;
 			uint32_t src_ip = my_as_info->port_ip[dst_port];
@@ -170,7 +161,12 @@ process_control_packet(struct rte_mbuf *m, uint8_t portid, struct lcore_conf *qc
 			rte_eth_macaddr_get(dst_port, &port_mac_addr);
 
 			int check = status_construct(my_as_info->my_status, con_data, ANN_STAT_TYPE);
-			show_segment(con_data, check);
+			if (check < 0) {
+				packet_result = RM_PACKET_RESULT_INTERNAL_ERROR;
+				rte_free(pkt_buf);
+				rte_free(con_data);
+				break;
+			}
 			CONTROL_init(pkt_buf, RET_STAT_ANN_INFO, check, con_data);
 			CONTROL_update_checksum(pkt_buf);
 
@@ -185,7 +181,14 @@ process_control_packet(struct rte_mbuf *m, uint8_t portid, struct lcore_conf *qc
 		{
 			void *pkt_buf = rte_malloc(NULL, 512, 0);
 			void *con_data = rte_malloc(NULL, 512, 0);
-			struct rte_ether_addr port_mac_addr_ret;
+			if (pkt_buf == NULL || con_data == NULL) {
+				rte_free(pkt_buf);
+				rte_free(con_data);
+				packet_result = RM_PACKET_RESULT_NO_MEMORY;
+				RM_LOG_ERROR(RM_LOG_MODULE_CONTROL, RM_EVENT_RESOURCE_EXHAUSTED,
+					portid, "unable to allocate GET status response");
+				break;
+			}
 
 			uint8_t dst_port = portid;
 			uint32_t src_ip = my_as_info->port_ip[dst_port];
@@ -194,6 +197,12 @@ process_control_packet(struct rte_mbuf *m, uint8_t portid, struct lcore_conf *qc
 			rte_eth_macaddr_get(dst_port, &port_mac_addr);
 
 			int check = status_construct(my_as_info->my_status, con_data, GET_STAT_TYPE);
+			if (check < 0) {
+				packet_result = RM_PACKET_RESULT_INTERNAL_ERROR;
+				rte_free(pkt_buf);
+				rte_free(con_data);
+				break;
+			}
 			CONTROL_init(pkt_buf, RET_STAT_GET_INFO, check, con_data);
 			CONTROL_update_checksum(pkt_buf);
 
@@ -208,6 +217,14 @@ process_control_packet(struct rte_mbuf *m, uint8_t portid, struct lcore_conf *qc
 		{
 			void *pkt_buf = rte_malloc(NULL, 512, 0);
 			void *con_data = rte_malloc(NULL, 512, 0);
+			if (pkt_buf == NULL || con_data == NULL) {
+				rte_free(pkt_buf);
+				rte_free(con_data);
+				packet_result = RM_PACKET_RESULT_NO_MEMORY;
+				RM_LOG_ERROR(RM_LOG_MODULE_CONTROL, RM_EVENT_RESOURCE_EXHAUSTED,
+					portid, "unable to allocate proxy status response");
+				break;
+			}
 			struct rte_ether_addr port_mac_addr;
 
 			uint8_t dst_port = portid;
@@ -216,6 +233,12 @@ process_control_packet(struct rte_mbuf *m, uint8_t portid, struct lcore_conf *qc
 			rte_eth_macaddr_get(dst_port, &port_mac_addr);
 
 			int check = status_construct(my_as_info->my_status, con_data, PROXY_STAT_TYPE);
+			if (check < 0) {
+				packet_result = RM_PACKET_RESULT_INTERNAL_ERROR;
+				rte_free(pkt_buf);
+				rte_free(con_data);
+				break;
+			}
 			CONTROL_init(pkt_buf, RET_STAT_PROXY_INFO, check, con_data);
 			CONTROL_update_checksum(pkt_buf);
 
@@ -228,8 +251,10 @@ process_control_packet(struct rte_mbuf *m, uint8_t portid, struct lcore_conf *qc
 		}
 		case CONTROL_UNKNOWN_TAG:
 		{
-			cli_print("[?] Unknown for CONTROL\n");
+			RM_LOG_WARN(RM_LOG_MODULE_CONTROL, RM_EVENT_CONTROL_UNKNOWN,
+				portid, "unknown CONTROL tag");
 		}
 	}
+	rm_metrics_record_result(RM_PACKET_CONTROL, packet_result);
 	rte_pktmbuf_free(m);
 }

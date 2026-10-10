@@ -4,6 +4,7 @@
 #include <rte_ethdev.h>
 #include <rte_vect.h>
 #include "app/init.h"
+#include "telemetry/rm_metrics.h"
 
 #define DO_RFC_1812_CHECKS
 
@@ -67,7 +68,9 @@ send_burst(struct lcore_conf *qconf, uint16_t n, uint16_t port)
 	m_table = (struct rte_mbuf **)qconf->tx_mbufs[port].m_table;
 
 	ret = rte_eth_tx_burst(port, queueid, m_table, n);
+	rm_metrics_add(RM_METRIC_TX_PACKETS, (uint64_t)ret);
 	if (unlikely(ret < n)) {
+		rm_metrics_add(RM_METRIC_TX_DROPPED, (uint64_t)(n - ret));
 		do {
 			rte_pktmbuf_free(m_table[ret]);
 		} while (++ret < n);

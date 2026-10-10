@@ -13,32 +13,32 @@
 typedef struct status_ANN
 {
     // basic info
-    int from_inside_count;
-    int from_outside_count;
-    int outbound_count;
-    int filtered_count;
+    uint64_t from_inside_count;
+    uint64_t from_outside_count;
+    uint64_t outbound_count;
+    uint64_t filtered_count;
 
     // trace as
-    int trace_res[256];
+    uint64_t trace_res[256];
 
 } status_ANN_t;
 
 typedef struct status_proxy
 {
-    int register_count;
+    uint64_t register_count;
 } status_proxy_t;
 
 typedef struct status_GET
 {
     // basic info
-    int from_inside_count;
-    int from_outside_count;
-    int to_inside_count;
-    int to_outside_count;
-    int filtered_count;
+    uint64_t from_inside_count;
+    uint64_t from_outside_count;
+    uint64_t to_inside_count;
+    uint64_t to_outside_count;
+    uint64_t filtered_count;
 
     // trace as
-    int trace_res[256];
+    uint64_t trace_res[256];
 
 } status_GET_t;
 
@@ -55,7 +55,9 @@ typedef struct rm_status
 
 // function
 rm_status_t *status_create();
-int status_construct(rm_status_t *st, void *buf, uint8_t type);
-void status_show(rm_status_t *st);
+void status_destroy(rm_status_t *st);
+int status_snapshot(const rm_status_t *st, rm_status_t *out);
+int status_construct(const rm_status_t *st, void *buf, uint8_t type);
+void status_show(const rm_status_t *st);
 
 #endif

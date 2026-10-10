@@ -1,7 +1,6 @@
 #include "tables/rm_sid_table.h"
 #include "tables/rm_tables.h"
-#include "vendor/print.h"
-#include "commandline/cli.h"
+#include "telemetry/rm_log.h"
 
 
 // functions of SID 
@@ -16,6 +15,10 @@ sid_create(uint16_t px, void *node_pt, uint8_t as_path_len)
     ans->px = px;
     ans->node_pt = node_pt;
     ans->strategy_array = rte_array_create(4, sizeof(strategy_t));
+    if (ans->strategy_array == NULL) {
+        rte_free(ans);
+        return NULL;
+    }
     ans->next = NULL;
     ans->as_path_len = as_path_len;
     return ans;
@@ -25,6 +28,8 @@ strategy_t *
 strategy_create(uint8_t t, uint8_t l, uint8_t *v)
 {
     strategy_t *ans = (strategy_t *)rte_malloc(NULL, sizeof(strategy_t), 0);
+    if (ans == NULL)
+        return NULL;
     ans->tag = t;
     ans->len = l;
     ans->value = v;
@@ -36,13 +41,13 @@ sid_add_strategy(sid_info_t *ans, strategy_t *tar)
 {
     if(!ans || !tar)
         return -1;
-    if(1 == rte_array_add(ans->strategy_array, tar))
-    {
-        rte_free(tar); // to prevent mem leak
-        return 1;
-    }
-    else
+    if (rte_array_add(ans->strategy_array, tar) != 1) {
+        rte_free(tar->value);
+        rte_free(tar);
         return -1;
+    }
+    rte_free(tar); // the array stores a copy of the strategy descriptor
+    return 1;
 }
 
 int
@@ -63,6 +68,7 @@ sid_info_destroy(sid_info_t *st)
     rte_array_loop_function(st->strategy_array, sid_free_single_strategy);
     rte_array_destroy(st->strategy_array);
     rte_free(st);
+    return 1;
 }
 
 bool
@@ -103,12 +109,18 @@ sid_store_insert(uint8_t *N_sid, uint8_t *L_sid, sid_info_t *info_node,
                     int cmp(sid_info_t *x, sid_info_t *y))
 {
     if(!info_node){
-        cli_print("[#] info_node is null pointer\n");
+        RM_LOG_ERROR(RM_LOG_MODULE_TABLE, RM_EVENT_PACKET_MALFORMED,
+            RM_LOG_PORT_NONE, "SID insert rejected: info node is null");
         return -1;
     }
 
     struct cuckoo_hash_item *check_pt;
     sid_table_node_t *head = (sid_table_node_t *)rte_malloc(NULL, sizeof(sid_table_node_t), 0);
+    if (head == NULL) {
+        RM_LOG_ERROR(RM_LOG_MODULE_TABLE, RM_EVENT_RESOURCE_EXHAUSTED,
+            RM_LOG_PORT_NONE, "SID insert failed: unable to allocate table node");
+        return -1;
+    }
     head->sid_info_list = NULL;
 
     uint8_t len = 0;
@@ -131,7 +143,9 @@ sid_store_insert(uint8_t *N_sid, uint8_t *L_sid, sid_info_t *info_node,
         hash_pt = sid_store.N_hash_table;
     }
     else {
-        cli_print("neither LSID nor SNID is given\n");
+        RM_LOG_ERROR(RM_LOG_MODULE_TABLE, RM_EVENT_PACKET_MALFORMED,
+            RM_LOG_PORT_NONE, "SID insert rejected: neither N-SID nor L-SID supplied");
+        rte_free(head);
         return -1;
     }
     
@@ -142,7 +156,7 @@ sid_store_insert(uint8_t *N_sid, uint8_t *L_sid, sid_info_t *info_node,
     {
         if(N_sid && L_sid)//如果两个都有，我们就要把它添加到TSID总表之中，这里的N_sid和L_sid都是指向数据包缓冲区的指针，按照解析顺序先N，所以从N指针开始往后读36个字节就可以把N和L都拷贝进来
         {
-            int tret = tsid_table_add(N_sid);
+            (void)tsid_table_add(N_sid);
         }
         head->sid_info_list = info_node;
         return 1;
@@ -200,7 +214,6 @@ sid_store_insert(uint8_t *N_sid, uint8_t *L_sid, sid_info_t *info_node,
            if(check_same_sid_node(info_node, npt))
            {
                if(check_same_strategy(info_node, npt)){
-                   cli_print("same strategy\n");
                    return -2;
                }
                rte_array_destroy(npt->strategy_array);
@@ -246,7 +259,8 @@ sid_store_insert(uint8_t *N_sid, uint8_t *L_sid, sid_info_t *info_node,
     }
     else
     {
-        cli_print("[#] sid_store_insert: CUCKOO_HASH_FAILED\n");
+        RM_LOG_ERROR(RM_LOG_MODULE_TABLE, RM_EVENT_RESOURCE_EXHAUSTED,
+            RM_LOG_PORT_NONE, "SID insert failed: hash table expansion failed");
         rte_free(head);
         return -1;
     }
@@ -263,20 +277,12 @@ sid_store_search(uint8_t *n_sid, uint8_t *l_sid)
     if(n_sid)
     {
         if((pt = cuckoo_hash_lookup(sid_store.N_hash_table, n_sid, 16)) != NULL)
-        {
-            cli_print("Found N_SID\n");
             return (sid_table_node_t *) (pt->value);
-        }
     }
     if(l_sid)
     {
         if((pt = cuckoo_hash_lookup(sid_store.L_hash_table, l_sid, 20)) != NULL)
-        {
-            cli_print("Found L_SID: \n");
-            show_data(l_sid, 20, false);
-            cli_print("\n");
             return (sid_table_node_t *) (pt->value);
-        }
     }
     return NULL;
 }
@@ -288,6 +294,7 @@ static int sid_equal(const uint8_t *sid1, const uint8_t *sid2) {
 int tsid_table_init()
 {
     g_tsid_table.count = 0;
+    return 0;
 }
 
 
@@ -309,7 +316,8 @@ int tsid_table_add(const uint8_t *new_sid)
     //检查容量
     if(g_tsid_table.count >= MAX_SID_NUM)
     {
-        cli_print("错误：TSID表溢出\n");
+        RM_LOG_ERROR(RM_LOG_MODULE_TABLE, RM_EVENT_RESOURCE_EXHAUSTED,
+            RM_LOG_PORT_NONE, "TSID table is full capacity=%u", MAX_SID_NUM);
         return -1;
     }
 

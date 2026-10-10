@@ -2,6 +2,7 @@
 #include "tables/rm_tables.h"
 #include "vendor/print.h"
 #include "commandline/cli.h"
+#include "telemetry/rm_log.h"
 
 void
 node_rel(void *p)
@@ -47,60 +48,85 @@ int
 rm_data_initialize()
 {
     int i;
-    cli_print(BLUE "[>] Start initializing...\n");
-    cli_print(RESET "");
 
     // initialize table of basic 
     br_store.br_count = 0;
     br_store.store_data = jsw_rbnew(br_node_cmp, br_node_dup, node_rel);
-    if(br_store.store_data != NULL){cli_print(GREEN "[+] br_store initialized successfully\n");
-        cli_print(RESET "");
-    }
-    else{cli_print(RED "[!] br_store initialized unsuccessfully\n");
-        cli_print(RESET "");
+    if (br_store.store_data == NULL) {
+        RM_LOG_ERROR(RM_LOG_MODULE_TABLE, RM_EVENT_TABLE_INITIALIZATION_FAILED,
+            RM_LOG_PORT_NONE, "BR table initialization failed");
+        return -1;
     }
 
     proxy_store.proxy_count = 0;
     proxy_store.store_data = jsw_rbnew(proxy_node_cmp, proxy_node_dup, node_rel);
-    if(proxy_store.store_data!= NULL){cli_print(GREEN "[+] proxy_store initialized successfully\n");
-        cli_print(RESET "");
-    }
-    else{cli_print(RED "[!] proxy_store initialized unsuccessfully\n");
-        cli_print(RESET "");
+    if (proxy_store.store_data == NULL) {
+        RM_LOG_ERROR(RM_LOG_MODULE_TABLE, RM_EVENT_TABLE_INITIALIZATION_FAILED,
+            RM_LOG_PORT_NONE, "proxy table initialization failed");
+        return -1;
     }
     
     // initialize basic info
-    my_as_info = (my_basic_info_t *)rte_malloc(NULL, sizeof(my_basic_info_t), 0);
+    my_as_info = (my_basic_info_t *)rte_zmalloc(
+        "rm_basic_info", sizeof(my_basic_info_t), 0);
+    if (my_as_info == NULL) {
+        RM_LOG_ERROR(RM_LOG_MODULE_TABLE, RM_EVENT_TABLE_INITIALIZATION_FAILED,
+            RM_LOG_PORT_NONE, "basic RM state initialization failed");
+        return -1;
+    }
     my_as_info->quick_mark = 0;
     my_as_info->global_strategy_store = rte_array_create(4, sizeof(strategy_t));
+    if (my_as_info->global_strategy_store == NULL) {
+        RM_LOG_ERROR(RM_LOG_MODULE_TABLE, RM_EVENT_TABLE_INITIALIZATION_FAILED,
+            RM_LOG_PORT_NONE, "global strategy table initialization failed");
+        return -1;
+    }
     for(i = 0; i < 32; i++)
     {
         my_as_info->port_ip[i] = 0; // 0 for not open
     }
     my_as_info->as_graph = NULL;
     my_as_info->my_status = status_create();
+    if (my_as_info->my_status == NULL) {
+        RM_LOG_ERROR(RM_LOG_MODULE_TABLE, RM_EVENT_TABLE_INITIALIZATION_FAILED,
+            RM_LOG_PORT_NONE, "status view initialization failed");
+        return -1;
+    }
     
     // initialize table of as info
     as_store.as_array = rte_array_create(16, sizeof(as_info_t));
+    if (as_store.as_array == NULL) {
+        RM_LOG_ERROR(RM_LOG_MODULE_TABLE, RM_EVENT_TABLE_INITIALIZATION_FAILED,
+            RM_LOG_PORT_NONE, "AS table initialization failed");
+        return -1;
+    }
 
     // initialize table of sid info
     sid_store.N_hash_table = (cuckoo_hash_t *)rte_malloc(NULL, sizeof(cuckoo_hash_t), 0);
     sid_store.L_hash_table = (cuckoo_hash_t *)rte_malloc(NULL, sizeof(cuckoo_hash_t), 0);
+    if (sid_store.N_hash_table == NULL || sid_store.L_hash_table == NULL) {
+        RM_LOG_ERROR(RM_LOG_MODULE_TABLE, RM_EVENT_TABLE_INITIALIZATION_FAILED,
+            RM_LOG_PORT_NONE, "SID table initialization failed: no memory");
+        return -1;
+    }
     //sid_store.T_hash_table = (cuckoo_hash_t *)rte_malloc(NULL, sizeof(cuckoo_hash_t), 0);
-    cuckoo_hash_init(sid_store.N_hash_table, N_HASH_POEWER);
-    cuckoo_hash_init(sid_store.L_hash_table, L_HASH_POEWER);
+    if (!cuckoo_hash_init(sid_store.N_hash_table, N_HASH_POEWER) ||
+        !cuckoo_hash_init(sid_store.L_hash_table, L_HASH_POEWER)) {
+        RM_LOG_ERROR(RM_LOG_MODULE_TABLE, RM_EVENT_TABLE_INITIALIZATION_FAILED,
+            RM_LOG_PORT_NONE, "SID hash table initialization failed");
+        return -1;
+    }
     //cuckoo_hash_init(sid_store.T_hash_table, T_HASH_POEWER);
 
-    if (0 == rm_acl_table_init()) {
-        cli_print(GREEN "[+] acl_store initialized successfully\n");
-        cli_print(RESET "");
-    } else {
-        cli_print(RED "[!] acl_store initialized unsuccessfully\n");
-        cli_print(RESET "");
+    if (rm_acl_table_init() != 0) {
+        RM_LOG_ERROR(RM_LOG_MODULE_TABLE, RM_EVENT_TABLE_INITIALIZATION_FAILED,
+            RM_LOG_PORT_NONE, "ACL table initialization failed");
+        return -1;
     }
 
-    cli_print(GREEN "[+] Initialize successfully! ^o^ ^o^ ^o^\n");
-    cli_print(RESET "");
+    RM_LOG_INFO(RM_LOG_MODULE_TABLE, RM_EVENT_TABLE_INITIALIZED,
+        RM_LOG_PORT_NONE, "runtime tables initialized");
+    return 0;
 }
 
 // global info setting

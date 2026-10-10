@@ -46,7 +46,7 @@ extern bool rm_cli_enabled;
 extern unsigned rm_cli_lcore_id;
 
 void init_eal(int argc, char **argv);
-void init_port(uint16_t port_id, struct rte_mempool *pool);
+int init_port(uint16_t port_id, struct rte_mempool *pool);
 void init_lcore_conf(void);
 
 #endif /* __INIT_H__ */

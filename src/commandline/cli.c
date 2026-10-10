@@ -48,8 +48,6 @@
 /* 命令历史配置 */
 #define HISTORY_MAX 50
 
-extern volatile bool force_quit;
-
 /* 接收缓冲区 - 支持光标移动 */
 struct rx_buffer {
     char data[RM_CLI_RX_BUFFER_SIZE];
@@ -86,7 +84,7 @@ static int get_terminal_width(void)
    ======================================== */
 static void writefd(const char *s)
 {
-    while (*s != '\0' && !force_quit) {
+    while (*s != '\0' && !atomic_load_explicit(&force_quit, memory_order_acquire)) {
         ssize_t n = write(1, s, strlen(s));
         if (n > 0) {
             s += n;
@@ -98,7 +96,7 @@ static void writefd(const char *s)
 
 static void writefd_char(char c)
 {
-    while (!force_quit) {
+    while (!atomic_load_explicit(&force_quit, memory_order_acquire)) {
         ssize_t n = write(1, &c, 1);
         if (n == 1) {
             return;
@@ -443,7 +441,7 @@ int cli_main_loop(__attribute__((unused)) void *dummy)
     rx_buffer_reset(&rx_buffer);
     refresh_line(&rx_buffer);
 
-    while (!force_quit) {
+    while (!atomic_load_explicit(&force_quit, memory_order_acquire)) {
         ssize_t nread = read(0, buff, sizeof(buff));
         if (nread <= 0) {
             usleep(10 * 1000);
@@ -471,7 +469,7 @@ int cli_main_loop(__attribute__((unused)) void *dummy)
                         history_add(line);
                         parse_line(line);
                     }
-                    if (!force_quit) {
+                    if (!atomic_load_explicit(&force_quit, memory_order_acquire)) {
                         refresh_line(&rx_buffer);
                     }
                 }

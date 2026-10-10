@@ -12,6 +12,7 @@ extern struct rte_mempool *broadcast_tx_pool;
 #include "packets/ann.h"
 #include "packets/ctrl.h"
 #include "packets/get.h"
+#include "telemetry/rm_metrics.h"
 
 
 static __rte_always_inline void
@@ -22,6 +23,7 @@ rm_process_single_packet(struct rte_mbuf *m, uint8_t portid, struct lcore_conf *
     uint8_t *dst_mac;
     struct rte_ether_addr port_mac_addr;
     struct rte_mbuf *pkt;
+	rm_metrics_add(RM_METRIC_RX_PACKETS, 1);
     struct rte_ether_hdr *eth_layer_pt = (struct rte_ether_hdr *)rte_pktmbuf_mtod_offset(m, struct rte_ether_hdr *, 0);
 
 	// arp type
@@ -34,6 +36,7 @@ rm_process_single_packet(struct rte_mbuf *m, uint8_t portid, struct lcore_conf *
 	// filter non-IP protocol
 	else if(eth_layer_pt->ether_type != rte_cpu_to_be_16(RTE_ETHER_TYPE_IPV4))
 	{
+		rm_metrics_add(RM_METRIC_RX_NON_IPV4, 1);
 		// printf("Filter pkg of no IPv4\n");
 		rte_pktmbuf_free(m);
 		return;
@@ -42,6 +45,7 @@ rm_process_single_packet(struct rte_mbuf *m, uint8_t portid, struct lcore_conf *
 	// Not CoLoR packet
 	struct rte_ipv4_hdr *ip_layer_pt = (struct rte_ipv4_hdr *)rte_pktmbuf_mtod_offset(m, struct rte_ipv4_hdr *, sizeof(struct rte_ether_hdr));
 	if (ip_layer_pt->next_proto_id != 150) {
+		rm_metrics_add(RM_METRIC_RX_NON_COLOR, 1);
 		rte_pktmbuf_free(m);
 		return;
 	}
@@ -51,6 +55,9 @@ rm_process_single_packet(struct rte_mbuf *m, uint8_t portid, struct lcore_conf *
 	// color protocol
 	if((check = CoLoR_get_pkg_protocol(pkt_data)) != COLOR_PROTOCOL)
 	{
+		rm_metrics_add(RM_METRIC_RX_NON_COLOR, 1);
+		RM_LOG_WARN(RM_LOG_MODULE_APP, RM_EVENT_PACKET_MALFORMED,
+			portid, "unsupported CoLoR protocol %d", check);
 		// printf("Get pkg of unknown CoLoR protocol\n");
 		rte_pktmbuf_free(m);
 		return;
@@ -71,6 +78,7 @@ rm_process_single_packet(struct rte_mbuf *m, uint8_t portid, struct lcore_conf *
 		case COLOR_DATA_TYPE:
 		{
 			// RM不处理DATA包
+			rm_metrics_add(RM_METRIC_RX_UNSUPPORTED, 1);
 			rte_pktmbuf_free(m);
 			break;
 		}
@@ -79,7 +87,10 @@ rm_process_single_packet(struct rte_mbuf *m, uint8_t portid, struct lcore_conf *
 			process_control_packet(m, portid, qconf);
 			break;
 		}
-		default: break;
+		default:
+			rm_metrics_add(RM_METRIC_RX_UNSUPPORTED, 1);
+			rte_pktmbuf_free(m);
+			break;
 	}
 
 }

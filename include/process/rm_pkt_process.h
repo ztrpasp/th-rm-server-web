@@ -29,6 +29,9 @@ typedef struct px_unit
 #define RM_GET_FILTERED -4
 #define RM_PROCESS_ERR -5
 #define RM_RETURN_SID_LIST -6
+#define RM_GET_ACL_DENIED -7
+#define RM_GET_POLICY_DENIED -8
+#define RM_ERR_NO_MEMORY -9
 
 
 // ANN process

@@ -1,9 +1,10 @@
 #include "process/rm_pkt_process.h"
 #include "tables/rm_tables.h"
-#include "vendor/print.h"
 #include "packets/pkt.h"
 #include "packets/rte_CoLoR.h"
 #include "commandline/cli.h"
+#include "telemetry/rm_log.h"
+#include "telemetry/rm_metrics.h"
 
 int
 insert_cmp(sid_info_t *wait, sid_info_t *now)
@@ -89,26 +90,27 @@ rm_ANN_check_filter(ANN_front_t *head, mark_t *info_mark)
     // check N/L/nid legally
     if(px_num == 0 && info_mark->nid_pt == NULL)
     {
-        cli_print("The ANN packet is filtered: Inner-ANN without nid\n");
+        RM_LOG_WARN(RM_LOG_MODULE_ANN, RM_EVENT_PACKET_MALFORMED,
+            RM_LOG_PORT_NONE, "inner ANN has no NID");
         return 1;
     }
     if(info_mark->N_pt == NULL && info_mark->L_pt == NULL)
     {
-        cli_print("The ANN packet is filtered: at least one NSID or LSID must exist\n");
+        RM_LOG_WARN(RM_LOG_MODULE_ANN, RM_EVENT_PACKET_MALFORMED,
+            RM_LOG_PORT_NONE, "ANN unit has neither N-SID nor L-SID");
         return 1;
     }
     if(global_quick_check_strategy(STRATEGY_TRACE_EVERY_PKG) && px_num != 0)
     {
         // *(uint16_t *)(pkt + pt->pkg_len - 2);
-        cli_print("Start tracing\n");
         check = graph_trace_px(my_as_info->as_graph, (void *)head + head->pkg_len - px_num * 2, px_num, as_trace);
         if(check == 0)
         {
-            cli_print("The ANN packet is filtered: illegal ANN path\n");
+            RM_LOG_WARN(RM_LOG_MODULE_ANN, RM_EVENT_ANN_POLICY_DENIED,
+                RM_LOG_PORT_NONE, "ANN path validation failed");
             return 1;
         }
-        // STATUS
-        my_as_info->my_status->ANN_stat.trace_res[as_trace[check - 1]]++;
+        rm_metrics_record_trace(RM_PACKET_ANN, as_trace[check - 1]);
     }
     return 0;
 }
@@ -134,16 +136,16 @@ rm_ANN_parse_store(void *pkt, mark_t *mark_array, search_px_result_t *src_px_res
     // check unit_count limit
     if(unit_count > 32)
     {
-        cli_print(RED "[!] Error: unit_count %d exceeds maximum limit of 32\n", unit_count);
-        cli_print(RESET "");
+        RM_LOG_WARN(RM_LOG_MODULE_ANN, RM_EVENT_PACKET_MALFORMED,
+            RM_LOG_PORT_NONE, "ANN unit count %u exceeds 32", unit_count);
         return RM_PROCESS_ERR;
     }
 
     // check the checksum
     if(ANN_check_checksum(pkt) == 0)
     {
-        cli_print(RED "[!] ERR: bad checksum\n");
-        cli_print(RESET "");
+        RM_LOG_WARN(RM_LOG_MODULE_ANN, RM_EVENT_PACKET_BAD_CHECKSUM,
+            RM_LOG_PORT_NONE, "ANN checksum validation failed");
         return RM_ERR_CHECKSUM_UNPASSED;
     }
 
@@ -154,17 +156,15 @@ rm_ANN_parse_store(void *pkt, mark_t *mark_array, search_px_result_t *src_px_res
         // check and use px to get as and br
         if(0 >= as_store_search_px(last_px, src_px_res))
         {
-            cli_print(RED "[!] ERR: Unable to find the BR for PX %x\n", last_px);
-            cli_print(RESET "");
+            RM_LOG_WARN(RM_LOG_MODULE_ANN, RM_EVENT_ANN_NO_SOURCE_PATH,
+                RM_LOG_PORT_NONE, "no border-router mapping for PX 0x%04x", last_px);
             return RM_PROCESS_ERR;
         }
-        // STATUS
-        my_as_info->my_status->ANN_stat.from_outside_count++;
+        rm_metrics_add(RM_METRIC_ANN_FROM_OUTSIDE, 1);
     }
     else
     {
-        // STATUS
-        my_as_info->my_status->ANN_stat.from_inside_count++;
+        rm_metrics_add(RM_METRIC_ANN_FROM_INSIDE, 1);
         src_px_res->target_as = NULL;
         src_px_res->target_br = NULL;
     }
@@ -205,6 +205,12 @@ rm_ANN_parse_store(void *pkt, mark_t *mark_array, search_px_result_t *src_px_res
 
         // parse ann strategy part and mark
         strategy_count = unit_front->strategy_num;
+        if (strategy_count > 32) {
+            RM_LOG_WARN(RM_LOG_MODULE_ANN, RM_EVENT_PACKET_MALFORMED,
+                RM_LOG_PORT_NONE,
+                "ANN strategy count %u exceeds 32", strategy_count);
+            return RM_PROCESS_ERR;
+        }
         for(j = 0; j < strategy_count; j++)
         {
             // mark the strategy pt
@@ -230,24 +236,24 @@ rm_ANN_parse_store(void *pkt, mark_t *mark_array, search_px_result_t *src_px_res
                 proxy_mid = proxy_store_search(nid);
                 if(NULL == proxy_mid)
                 {
-                    cli_print(RED "[!] Error: Unable to find the Proxy for NID\n");
-                    cli_print(RESET "");
+                    RM_LOG_WARN(RM_LOG_MODULE_ANN, RM_EVENT_ANN_PROXY_NOT_FOUND,
+                        RM_LOG_PORT_NONE, "no proxy mapping for ANN NID");
                     return RM_PROCESS_ERR;
                 }
                 if(NULL == (sid_mid = sid_create(0, proxy_mid, 0)))
                 {
-                    cli_print(RED "[!] Error: SID CREATE ERROR\n");
-                    cli_print(RESET "");
-                    return RM_PROCESS_ERR;
+                    RM_LOG_ERROR(RM_LOG_MODULE_ANN, RM_EVENT_RESOURCE_EXHAUSTED,
+                        RM_LOG_PORT_NONE, "unable to allocate local SID entry");
+                    return RM_ERR_NO_MEMORY;
                 }
             }
             else
             {
                 if(NULL == (sid_mid = sid_create(last_px, src_px_res->target_br, as_path_len)))
                 {
-                    cli_print(RED "[!] Error: SID CREATE ERROR\n");
-                    cli_print(RESET "");
-                    return RM_PROCESS_ERR;
+                    RM_LOG_ERROR(RM_LOG_MODULE_ANN, RM_EVENT_RESOURCE_EXHAUSTED,
+                        RM_LOG_PORT_NONE, "unable to allocate remote SID entry");
+                    return RM_ERR_NO_MEMORY;
                 }
             }
 
@@ -255,9 +261,27 @@ rm_ANN_parse_store(void *pkt, mark_t *mark_array, search_px_result_t *src_px_res
             for(j = 0; j < strategy_count; j++)
             {
                 value_pt = (void *)rte_malloc(NULL, mark_array[i].strategy_pt[j].len, 0);
+                if (value_pt == NULL) {
+                    sid_info_destroy(sid_mid);
+                    RM_LOG_ERROR(RM_LOG_MODULE_ANN, RM_EVENT_RESOURCE_EXHAUSTED,
+                        RM_LOG_PORT_NONE, "unable to copy ANN strategy value");
+                    return RM_ERR_NO_MEMORY;
+                }
                 rte_memcpy(value_pt, mark_array[i].strategy_pt[j].value, mark_array[i].strategy_pt[j].len);
                 st = strategy_create(mark_array[i].strategy_pt[j].tag, mark_array[i].strategy_pt[j].len, value_pt);
-                sid_add_strategy(sid_mid, st);
+                if (st == NULL) {
+                    rte_free(value_pt);
+                    sid_info_destroy(sid_mid);
+                    RM_LOG_ERROR(RM_LOG_MODULE_ANN, RM_EVENT_RESOURCE_EXHAUSTED,
+                        RM_LOG_PORT_NONE, "unable to allocate ANN strategy descriptor");
+                    return RM_ERR_NO_MEMORY;
+                }
+                if (sid_add_strategy(sid_mid, st) != 1) {
+                    sid_info_destroy(sid_mid);
+                    RM_LOG_ERROR(RM_LOG_MODULE_ANN, RM_EVENT_RESOURCE_EXHAUSTED,
+                        RM_LOG_PORT_NONE, "unable to append ANN strategy");
+                    return RM_ERR_NO_MEMORY;
+                }
             }
          
             // insert into sid_table
@@ -265,27 +289,15 @@ rm_ANN_parse_store(void *pkt, mark_t *mark_array, search_px_result_t *src_px_res
             int sid_store_insert_ret = sid_store_insert(N_sid, L_sid, sid_mid, insert_cmp);
             if(0 > sid_store_insert_ret)
             {
-                cli_print(RED "[!] Error: Unable to insert into sid_table\n");
-                cli_print(RESET "");
+                RM_LOG_ERROR(RM_LOG_MODULE_TABLE, RM_EVENT_RESOURCE_EXHAUSTED,
+                    RM_LOG_PORT_NONE, "unable to insert SID entry");
                 sid_info_destroy(sid_mid);
                 // mark the sid
                 mark_array[i].filtered = true;
             }
             else if(0 == sid_store_insert_ret)
             {
-                cli_print("Not the shortest path, as a backup path, do not continue forwarding the ANN pak:\n");
-                cli_print("SID successfully added ");
-                cli_print("%s", (sid_mid->px == 0)? "from this domain" : "from other domain");
-                cli_print(" NSID = ");show_data(N_sid, 16, false);
-                cli_print(" LSID = ");show_data(L_sid, 20, false);cli_print("\n");
                 mark_array[i].filtered = true;
-            }
-            else // DEBUG
-            {
-                cli_print("SID successfully added ");
-                cli_print("%s", (sid_mid->px == 0)? "from this domain" : "from other domain");
-                cli_print(" NSID = ");show_data(N_sid, 16, false);
-                cli_print(" LSID = ");show_data(L_sid, 20, false);cli_print("\n");
             }
         }
     }
@@ -328,13 +340,8 @@ rm_ANN_forward_px_units(void *pkt, mark_t *mark_array, search_px_result_t *src_p
             continue;
         if(global_quick_check_strategy(STRATEGY_AS_SECURITY_CHECK))
         {
-            cli_print("Checking AS security level: AS%d to AS%d; security level: %d to %d, ",
-                my_as_info->aid, as_pt->aid, my_as_info->security_level, as_pt->security_level);
             if(my_as_info->security_level > as_pt->security_level) {
-                cli_print("not allowed\n");
                 continue;
-            } else {
-                cli_print("ok\n");
             }
         }
 
@@ -381,11 +388,9 @@ rm_ANN_forward_px_units(void *pkt, mark_t *mark_array, search_px_result_t *src_p
                         if(!global_quick_check_strategy(STRATEGY_SECURITY_LEVEL_CHECK))
                             break;
                         uint8_t sl = *(uint8_t *)(mark_array[j].strategy_pt[s_i].value);
-                        cli_print("AS%d security level is %d, require %d\n", as_pt->aid, as_pt->security_level, sl);
                         if(sl > as_pt->security_level)
                         {
                             unit_filter = true;
-                            cli_print("The ANN packet is filtered: the security level of AS %d is too low\n", as_pt->aid);
                         }
                         break;
                     }
@@ -396,7 +401,6 @@ rm_ANN_forward_px_units(void *pkt, mark_t *mark_array, search_px_result_t *src_p
                             break;
                         uint8_t road_i, road_limi = mark_array[j].strategy_pt[s_i].len,
                                 *road_data = mark_array[j].strategy_pt[s_i].value;
-                        cli_print("Checking AS path\n");
                         // loop to check the list
                         for(road_i = 0; road_i < road_limi; road_i++)
                         {
@@ -405,7 +409,6 @@ rm_ANN_forward_px_units(void *pkt, mark_t *mark_array, search_px_result_t *src_p
                         }
                         if(road_limi == road_i)
                         {
-                            cli_print("The ANN packet is filtered: AS %d not in the list\n", as_pt->aid);
                             unit_filter = true;
                         }
                         break;
@@ -561,11 +564,9 @@ rm_GET_check_filter(void *pkt, sid_info_t *search_res)
             p_check = graph_trace(my_as_info->as_graph, pkt + sizeof(GET_front_t), get_pt->PID_num, as_trace);
             if(p_check == 0)
             {
-                cli_print("The GET packet is filtered: illegal path\n");
                 return 1;
             }
-            // STATUS
-            my_as_info->my_status->GET_stat.trace_res[as_trace[p_check - 1]]++;
+            rm_metrics_record_trace(RM_PACKET_GET, as_trace[p_check - 1]);
         }
     }
     else
@@ -605,15 +606,12 @@ rm_GET_check_filter(void *pkt, sid_info_t *search_res)
                         p_check = graph_trace(my_as_info->as_graph, pkt + sizeof(GET_front_t), get_pt->PID_num, as_trace);
                     if(p_check == 0)
                     {
-                        cli_print("The GET packet is filtered: illegal path\n");
                         return 1;
                     }
                     else
                     {
-                        cli_print("GET Path: 3 -> ", my_as_info->aid);
                         for(j = 0; j < p_check; j++)
                         {
-                            cli_print("%d -> ", as_trace[j]);
                             // check the white list
                             for(k = 0; k < gt->len; k++)
                             {
@@ -622,11 +620,9 @@ rm_GET_check_filter(void *pkt, sid_info_t *search_res)
                             }
                             if(k == gt->len)
                             {
-                                cli_print(" The GET packet is filtered: illegal path\n");
                                 return 1;
                             }
                         }
-                        cli_print("\n");
                     }
                 }
                 break;
@@ -652,7 +648,6 @@ rm_GET_process(void *pkt, sid_info_t **node_pt, struct rte_ipv4_hdr *ip_layer_pt
     if(!pkt || !node_pt || !ip_layer_pt || !qconf)
         return RM_ERR_NULL_PT_INPUT;
 
-    uint8_t buf[256], len;
     GET_front_t *get_pt = (GET_front_t *)pkt;
     sid_info_t *search_node;
     uint32_t acl_match_id = 0;
@@ -661,7 +656,8 @@ rm_GET_process(void *pkt, sid_info_t **node_pt, struct rte_ipv4_hdr *ip_layer_pt
     // checksum check
     if(GET_check_checksum(pkt) == 0)
     {
-        cli_print("ERR: checksum failure\n");
+        RM_LOG_WARN(RM_LOG_MODULE_GET, RM_EVENT_PACKET_BAD_CHECKSUM,
+            RM_LOG_PORT_NONE, "GET checksum validation failed");
         return RM_ERR_CHECKSUM_UNPASSED;
     }
 
@@ -691,7 +687,8 @@ rm_GET_process(void *pkt, sid_info_t **node_pt, struct rte_ipv4_hdr *ip_layer_pt
         }
         if(zero_flag)//全0sid说明proxy正在向RM请求SID列表
         {
-            cli_print("Returning SID-Lists to proxy\n");
+            RM_LOG_INFO(RM_LOG_MODULE_GET, RM_EVENT_GET_SID_LIST_RETURNED,
+                0, "returning %u SID entries to proxy", g_tsid_table.count);
             struct rte_ether_addr port_mac_addr;
             uint8_t dst_port = 0;//目前RM只有port0
             uint32_t src_ip = my_as_info->port_ip[dst_port];
@@ -703,18 +700,14 @@ rm_GET_process(void *pkt, sid_info_t **node_pt, struct rte_ipv4_hdr *ip_layer_pt
             if(total == 0)
                 return RM_RETURN_SID_LIST;
                 
-            // check sid_list pointer
-            if(g_tsid_table.sid_list == NULL)
-                return RM_RETURN_SID_LIST;
-                
             for(int i = 0; i < total; i = i + 10)//todo:定义一个宏取代10
             {
                 void *pkt_buf = rte_malloc(NULL, 512, 0);
                 if(!pkt_buf)
                 {
-                    cli_print(RED "[!] pkt_buf 分配失败\n");
-                    cli_print(RESET "");
-                    continue;
+                    RM_LOG_ERROR(RM_LOG_MODULE_GET, RM_EVENT_RESOURCE_EXHAUSTED,
+                        dst_port, "unable to allocate SID-list packet buffer");
+                    return RM_ERR_NO_MEMORY;
                 }
                 
                 int num_to_copy = 10;
@@ -726,10 +719,10 @@ rm_GET_process(void *pkt, sid_info_t **node_pt, struct rte_ipv4_hdr *ip_layer_pt
                 uint8_t *con_buf = rte_malloc(NULL, num_to_copy * SID_LEN, 0);
                 if(!con_buf)
                 {
-                    cli_print(RED "[!] sid list ctrl分配失败\n");
-                    cli_print(RESET "");
                     rte_free(pkt_buf);
-                    continue;
+                    RM_LOG_ERROR(RM_LOG_MODULE_GET, RM_EVENT_RESOURCE_EXHAUSTED,
+                        dst_port, "unable to allocate SID-list payload buffer");
+                    return RM_ERR_NO_MEMORY;
                 }
 
                 for(int j = 0; j < num_to_copy; j++)
@@ -749,7 +742,8 @@ rm_GET_process(void *pkt, sid_info_t **node_pt, struct rte_ipv4_hdr *ip_layer_pt
 
         }
 
-        cli_print("Error: cannot find SID\n");
+        RM_LOG_WARN(RM_LOG_MODULE_GET, RM_EVENT_GET_SID_NOT_FOUND,
+            RM_LOG_PORT_NONE, "GET SID was not found");
         
         // Presentation: as 1 add attacker function
         if(my_as_info->aid != 1)
@@ -761,7 +755,7 @@ rm_GET_process(void *pkt, sid_info_t **node_pt, struct rte_ipv4_hdr *ip_layer_pt
         
         search_node = (sid_info_t *)rte_malloc(NULL, sizeof(sid_info_t), 0);
         if(!search_node)
-            return RM_GET_SID_UNFOUND;
+            return RM_ERR_NO_MEMORY;
             
         // forward to the first br of the first as
         as_info_t *apt = (as_info_t *)(as_store.as_array->data);
@@ -791,37 +785,27 @@ rm_GET_process(void *pkt, sid_info_t **node_pt, struct rte_ipv4_hdr *ip_layer_pt
     rte_memcpy(acl_sid + COLOR_N_SID_LEN, get_pt->L_sid, COLOR_L_SID_LEN);
     if (rm_GET_get_source_asid(pkt, &source_asid) != RM_PROCESS_SUCCESS)
     {
-        my_as_info->my_status->GET_stat.filtered_count++;
-        char acl_msg[128];
-        snprintf(acl_msg, sizeof(acl_msg), "GET denied by ACL: unable to identify source AS\r\n");
-        rm_cli_notify(acl_msg);
-        cli_print("%s", acl_msg);
-        return RM_GET_FILTERED;
+        RM_LOG_WARN(RM_LOG_MODULE_SECURITY, RM_EVENT_GET_ACL_DENIED,
+            RM_LOG_PORT_NONE, "GET denied: unable to identify source AS");
+        return RM_GET_ACL_DENIED;
     }
     if (rm_acl_check_get(acl_sid, source_asid, get_pt->nid, &acl_match_id) == 0)
     {
-        my_as_info->my_status->GET_stat.filtered_count++;
-        char acl_msg[128];
-        snprintf(acl_msg, sizeof(acl_msg), "GET denied by ACL rule %u, source_asid=0x%08x\r\n",
+        RM_LOG_WARN(RM_LOG_MODULE_SECURITY, RM_EVENT_GET_ACL_DENIED,
+            RM_LOG_PORT_NONE,
+            "GET denied by ACL rule %u, source_asid=0x%08x",
             acl_match_id, source_asid);
-        rm_cli_notify(acl_msg);
-        cli_print("%s", acl_msg);
-        return RM_GET_FILTERED;
+        return RM_GET_ACL_DENIED;
     }
     
     // ### check and filter GET
     if(rm_GET_check_filter(pkt, search_node) == 1)
     {
-        cli_print("The GET packet is filtered\n");
-        return RM_GET_FILTERED;
+        RM_LOG_WARN(RM_LOG_MODULE_GET, RM_EVENT_GET_POLICY_DENIED,
+            RM_LOG_PORT_NONE, "GET denied by forwarding policy");
+        return RM_GET_POLICY_DENIED;
     }
 
-
-    // STATUS
-	if(get_pt->PID_num == 0)
-        my_as_info->my_status->GET_stat.from_inside_count++;
-    else
-        my_as_info->my_status->GET_stat.from_outside_count++;
 
     // update pkg info
     // 提供者在本域内，不计算PID
@@ -850,7 +834,8 @@ rm_CONTROL_process(void *pkt, int from_port)
         return RM_ERR_NULL_PT_INPUT;
     else if(CONTROL_check_checksum(pkt) == 0)
     {
-        cli_print("Bad checksum of CONTROL packet\n");
+        RM_LOG_WARN(RM_LOG_MODULE_CONTROL, RM_EVENT_PACKET_BAD_CHECKSUM,
+            from_port, "CONTROL checksum validation failed");
         return RM_ERR_CHECKSUM_UNPASSED;
     }
 
@@ -863,13 +848,10 @@ rm_CONTROL_process(void *pkt, int from_port)
     void *pt = pkt + con_pt->header_len;
     void *ept = pt + con_pt->len;
     parse_br_buf_t br_buf[128];
-    cli_print("Get the tag %d\n", con_pt->tag);
     switch(con_pt->tag) // use flag
     {
         case CONTROL_CONFIG_RM:
         {
-            cli_print("Receive a CONTROL for RM-config\n");
-            
             clear_syn_rm_config();
             
             // base as-info
@@ -915,7 +897,8 @@ rm_CONTROL_process(void *pkt, int from_port)
                     }
                 }
                 if(j == br_buf_count) {
-                    cli_print("Config failed: bad format\n");
+                    RM_LOG_WARN(RM_LOG_MODULE_CONTROL, RM_EVENT_PACKET_MALFORMED,
+                        from_port, "RM configuration references unknown BR %u", br_n);
                     return RM_PARSE_ERR_FORMAT;
                 }
                 con_mid = connect_info_create(br_buf[j].br_info_pt);
@@ -928,14 +911,16 @@ rm_CONTROL_process(void *pkt, int from_port)
         }
         case CONTROL_REG_PROXY:
         {
-            cli_print("Receive a CONTROL for Proxy REG\n");
             proxy_info_t ans;
             ans.port = from_port;
             ans.ip_addr = *(uint32_t *)pt;
             rte_memcpy(ans.nid, pt + 4, 16);
-            // STATUS
-            my_as_info->my_status->proxy_stat.register_count++;
-            cli_print(" IP: %x; port: %d; result: %s\n", ans.ip_addr, ans.port, proxy_store_insert(&ans) == 1 ? "ok" : "failed");
+            int insert_result = proxy_store_insert(&ans);
+            if (insert_result == 1) {
+                rm_metrics_add(RM_METRIC_PROXY_REGISTERED, 1);
+                RM_LOG_INFO(RM_LOG_MODULE_CONTROL, RM_EVENT_PROXY_REGISTERED,
+                    ans.port, "proxy registered, ip=0x%08x", ans.ip_addr);
+            }
             return CONTROL_REG_PROXY;
         }
         case CONTROL_GLOBAL_TOPOLOGY_INFO:
@@ -958,7 +943,6 @@ rm_CONTROL_process(void *pkt, int from_port)
         {
             uint8_t s_tag;
             s_tag = *(uint8_t *)pt;
-            cli_print("Get the stag %d value %d\n", s_tag, *(uint8_t *)(pt + 3));
             switch(s_tag)
             {
                 case STRATEGY_SECURITY_LEVEL_CHECK:
@@ -973,12 +957,10 @@ rm_CONTROL_process(void *pkt, int from_port)
                     // set quick mark
                     if(1 == *(uint8_t *)(pt + 3))
                     {
-                        cli_print("Tag %d ON\n", s_tag);
                         global_quick_set_strategy(s_tag, true);
                     }
                     else
                     {
-                        cli_print("Tag %d OFF\n", s_tag);
                         global_quick_set_strategy(s_tag, false);
                     }
                     // add the strategy

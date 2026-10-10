@@ -4,8 +4,9 @@ app_sources = files('main.c','init.c')
 
 executable('rm', app_sources,
   include_directories: app_inc,
-  dependencies: [ dpdk_dep ],
+  dependencies: [ dpdk_dep, threads_dep ],
   link_with: [
+    lib_telemetry,
     lib_packets,
     lib_process,
     lib_tables,

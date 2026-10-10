@@ -51,6 +51,24 @@ run-rm.sh # 运行RM，需要关闭RM软件时按Ctrl+C退出
 
 启动后，使用help命令查看RM的使用帮助命令，目前主要是在RM上增加了ACL访问控制列表功能。
 
+运行期间可使用 `display status` 查看 ANN、GET 和 Proxy 的累计统计。统计从零开始，
+内部使用 64 位计数器；原有 CONTROL 状态响应继续保留 32 位兼容格式。
+
+RM 的运行事件会异步写入结构化日志，默认文件为当前目录下的 `rm.log`。单个日志文件
+达到 10 MiB 后自动轮转，最多保留 5 个历史文件。可以在启动前通过以下环境变量调整：
+
+```bash
+RM_LOG_FILE=./rm.log          # 日志文件路径；设置为 none/off 可关闭文件输出
+RM_LOG_LEVEL=info             # debug/info/warn/error，默认 info
+RM_LOG_STDERR=1               # 是否同时输出到 stderr，默认 1
+RM_LOG_ROTATE_SIZE=10485760   # 轮转阈值，单位字节，默认 10 MiB
+RM_LOG_ROTATE_FILES=5         # 历史文件数量，默认 5
+```
+
+高频异常事件会被限速，日志队列满时会丢弃日志并记录丢弃计数；完整流量数量以状态
+计数器为准。`display status` 中还包含总 RX/TX、非 IPv4、非 CoLoR、未支持类型和
+TX 丢弃等运行指标。
+
 ### 注意
 
 如果发现脚本不能运行，可能是权限问题

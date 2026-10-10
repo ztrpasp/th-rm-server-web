@@ -37,6 +37,8 @@ rte_array_add(rte_array_t *ans, void *element)
     else
     {
         void *new_data = (void *)rte_malloc(NULL, count * size * 2, 0);
+        if (new_data == NULL)
+            return -1;
         rte_memcpy(new_data, ans->data, count * size);
         rte_memcpy(new_data + count * size, element, size);
         rte_free(ans->data);

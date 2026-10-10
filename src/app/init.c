@@ -22,7 +22,7 @@ void init_eal(int argc, char **argv) {
         rte_exit(EXIT_FAILURE, "Error with EAL initialization\n");
 }
 
-void init_port(uint16_t port_id, struct rte_mempool *pool) {
+int init_port(uint16_t port_id, struct rte_mempool *pool) {
     struct rte_eth_conf port_conf = {0};
     const uint16_t rx_rings = 1, tx_rings = 1;
     uint16_t nb_rxd = RTE_TEST_RX_DESC_DEFAULT;
@@ -32,21 +32,21 @@ void init_port(uint16_t port_id, struct rte_mempool *pool) {
 
     ret = rte_eth_dev_configure(port_id, rx_rings, tx_rings, &port_conf);
     if (ret < 0)
-        rte_exit(EXIT_FAILURE, "Cannot configure device: err=%d, port=%u\n", ret, port_id);
+        return ret;
 
     ret = rte_eth_rx_queue_setup(port_id, 0, nb_rxd,
                                  rte_eth_dev_socket_id(port_id), NULL, pool);
     if (ret < 0)
-        rte_exit(EXIT_FAILURE, "RX queue setup failed: err=%d, port=%u\n", ret, port_id);
+        return ret;
 
     ret = rte_eth_tx_queue_setup(port_id, 0, nb_txd,
                                  rte_eth_dev_socket_id(port_id), NULL);
     if (ret < 0)
-        rte_exit(EXIT_FAILURE, "TX queue setup failed: err=%d, port=%u\n", ret, port_id);
+        return ret;
 
     ret = rte_eth_dev_start(port_id);
     if (ret < 0)
-        rte_exit(EXIT_FAILURE, "Device start failed: err=%d, port=%u\n", ret, port_id);
+        return ret;
 
     rte_eth_promiscuous_enable(port_id);
 
@@ -61,6 +61,7 @@ void init_port(uint16_t port_id, struct rte_mempool *pool) {
            mac_addr.addr_bytes[4],
            mac_addr.addr_bytes[5]);
     printf(RESET "");
+    return 0;
 }
 
 void init_lcore_conf(void) {

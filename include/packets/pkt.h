@@ -9,6 +9,7 @@
 #include "process/rm_send.h"
 #include "tables/rm_tables.h"
 #include "tables/rm_routing_table.h"
+#include "telemetry/rm_log.h"
 
 __rte_always_inline int
 rm_search_ip_return_port(uint32_t ip_addr)
@@ -30,7 +31,11 @@ rm_send_new_ip_pkt(struct lcore_conf* qconf, void* buf, int len,
     struct rte_ether_hdr eth_layer;
     struct rte_ipv4_hdr ip_layer;
     struct rte_mbuf* pkt = (struct rte_mbuf*)rte_pktmbuf_alloc((struct rte_mempool*)broadcast_tx_pool);
-
+    if (pkt == NULL) {
+        RM_LOG_ERROR(RM_LOG_MODULE_APP, RM_EVENT_RESOURCE_EXHAUSTED,
+            port, "unable to allocate outgoing IPv4 packet");
+        return;
+    }
 
     pkt->data_len = sizeof(struct rte_ether_hdr) + sizeof(struct rte_ipv4_hdr) + len;
 
@@ -68,11 +73,13 @@ rm_send_new_ip_pkt(struct lcore_conf* qconf, void* buf, int len,
     if (dst_mac == NULL)
     {
         // if unable to find ip-mac, store pkt
-        unsend_buf_add(dst_ip, next_hop_ip, port, pkt);
+        if (unsend_buf_add(dst_ip, next_hop_ip, port, pkt) != 0)
+            return;
         // send ARP request
         //lcf
         struct rte_mbuf* arp_pkt = construct_arp_req(src_ip, next_hop_ip, src_mac);
-        send_single_packet(qconf, arp_pkt, port);
+        if (arp_pkt != NULL)
+            send_single_packet(qconf, arp_pkt, port);
     }
     else
         send_single_packet(qconf, pkt, port);
@@ -92,7 +99,8 @@ store_control_rm_config(char *filename, uint8_t *buf)
 
     if(fp == NULL)
     {
-        printf("Unable to open file\n");
+        RM_LOG_ERROR(RM_LOG_MODULE_CONTROL, RM_EVENT_CONTROL_CONFIG_PERSIST_FAILED,
+            RM_LOG_PORT_NONE, "unable to persist RM configuration to %s", filename);
         return;
     }
 
@@ -123,6 +131,13 @@ send_config_br(struct lcore_conf *qconf)
     // num [AS PX IP]n
     uint8_t *pkt_buf = rte_malloc(NULL, 512, 0);
     uint8_t *con_data = rte_malloc(NULL, 512, 0);
+    if (pkt_buf == NULL || con_data == NULL) {
+        rte_free(pkt_buf);
+        rte_free(con_data);
+        RM_LOG_ERROR(RM_LOG_MODULE_CONTROL, RM_EVENT_RESOURCE_EXHAUSTED,
+            RM_LOG_PORT_NONE, "unable to allocate BR configuration buffers");
+        return;
+    }
     br_info_t *br_buf[64];
     int num_br = br_store_ret_node_list(br_buf);
     int num_path = as_store_ret_as_px_ip_list(con_data + 21);
@@ -136,17 +151,6 @@ send_config_br(struct lcore_conf *qconf)
         rte_memcpy(con_data, br_buf[i]->nid, 16);
         CONTROL_init(pkt_buf, CONTROL_CONFIG_BR, con_len, con_data);
         CONTROL_update_checksum(pkt_buf);
-
-        uint8_t *p = pkt_buf + sizeof(CONTROL_front_t) + 21;
-        for(int i = 0; i < num_path; i++)
-        {
-            printf("AS %x, PX 0x%08x/%d, IP %08x\n",
-                    *(uint32_t *)p,
-                    *(uint32_t *)(p + 5),
-                    *(uint8_t *)(p + 4),
-                    *(uint32_t *)(p + 9));
-            p += 13;
-        }
 
         uint8_t dst_port = br_buf[i]->port;
         uint32_t src_ip = my_as_info->port_ip[dst_port];
@@ -164,12 +168,18 @@ send_config_br(struct lcore_conf *qconf)
 __rte_always_inline void
 send_control_config_rm_ack(uint8_t dst_port, uint32_t dst_ip, struct lcore_conf *qconf)
 {
-    printf("Returning ACK_CONTROL_CONFIG_RM to sender\n");
     uint32_t src_ip = my_as_info->port_ip[dst_port];
     struct rte_ether_addr port_mac_addr;
     rte_eth_macaddr_get(dst_port, &port_mac_addr);
     uint8_t *pkt_buf = rte_malloc(NULL, 512, 0);
     uint8_t *con_data = rte_malloc(NULL, 512, 0);
+    if (pkt_buf == NULL || con_data == NULL) {
+        rte_free(pkt_buf);
+        rte_free(con_data);
+        RM_LOG_ERROR(RM_LOG_MODULE_CONTROL, RM_EVENT_RESOURCE_EXHAUSTED,
+            dst_port, "unable to allocate RM configuration ACK buffers");
+        return;
+    }
     *con_data = ACK_SUCCESS;
     CONTROL_init(pkt_buf, ACK_CONTROL_CONFIG_RM, 1, con_data);
     CONTROL_update_checksum(pkt_buf);

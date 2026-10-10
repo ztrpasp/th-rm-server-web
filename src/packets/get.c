@@ -3,55 +3,66 @@
 //
 #include "packets/get.h"
 #include "tables/rm_routing_table.h"
-#include "commandline/cli.h"
+#include "telemetry/rm_log.h"
+#include "telemetry/rm_metrics.h"
+
+static rm_packet_result_t
+get_metric_result(int result)
+{
+	switch (result) {
+	case RM_PROCESS_SUCCESS: return RM_PACKET_RESULT_OK;
+	case RM_RETURN_SID_LIST: return RM_PACKET_RESULT_SID_LIST_RETURNED;
+	case RM_ERR_CHECKSUM_UNPASSED: return RM_PACKET_RESULT_BAD_CHECKSUM;
+	case RM_GET_SID_UNFOUND: return RM_PACKET_RESULT_SID_NOT_FOUND;
+	case RM_GET_ACL_DENIED: return RM_PACKET_RESULT_ACL_DENIED;
+	case RM_GET_POLICY_DENIED:
+	case RM_GET_FILTERED: return RM_PACKET_RESULT_POLICY_DENIED;
+	case RM_ERR_NO_MEMORY: return RM_PACKET_RESULT_NO_MEMORY;
+	case RM_ERR_NULL_PT_INPUT: return RM_PACKET_RESULT_MALFORMED;
+	default: return RM_PACKET_RESULT_INTERNAL_ERROR;
+	}
+}
 
 void
 process_get_packet(struct rte_mbuf *m, uint8_t portid, struct lcore_conf *qconf)
 {
-	CLR_SCREEN();
-	cli_print(BLUE " $$$$$$\\  $$$$$$$$\\ $$$$$$$$\\ \n");
-	cli_print(BLUE "$$  __$$\\ $$  _____|\\__$$  __|\n");
-	cli_print(BLUE "$$ /  \\__|$$ |         $$ |   \n");
-	cli_print(BLUE "$$ |$$$$\\ $$$$$\\       $$ |   \n");
-	cli_print(BLUE "$$ |\\_$$ |$$  __|      $$ |   \n");
-	cli_print(BLUE "$$ |  $$ |$$ |         $$ |   \n");
-	cli_print(BLUE "\\$$$$$$  |$$$$$$$$\\    $$ |   \n");
-	cli_print(BLUE " \\______/ \\________|   \\__|   \n");
-	cli_print(RESET "");
-	cli_print("Receive a GET packet\n");
-	struct rte_ether_hdr *eth_layer_pt = (struct rte_ether_hdr *)rte_pktmbuf_mtod_offset(m, struct ether_hdr *, 0);
-	struct rte_ipv4_hdr *ip_layer_pt = (struct rte_ipv4_hdr *)rte_pktmbuf_mtod_offset(m, struct ipv4_hdr *, sizeof(struct rte_ether_hdr));
+	(void)portid;
+	rm_metrics_record_rx(RM_PACKET_GET);
+	struct rte_ether_hdr *eth_layer_pt = rte_pktmbuf_mtod_offset(
+		m, struct rte_ether_hdr *, 0);
+	struct rte_ipv4_hdr *ip_layer_pt = rte_pktmbuf_mtod_offset(
+		m, struct rte_ipv4_hdr *, sizeof(struct rte_ether_hdr));
 	uint8_t *pkt_data = rte_pktmbuf_mtod_offset(m, uint8_t *, sizeof(struct rte_ether_hdr) + sizeof(struct rte_ipv4_hdr));
+	bool from_outside = ((GET_front_t *)pkt_data)->PID_num != 0;
 
 	sid_info_t *sid_info;
-	if(RM_PROCESS_SUCCESS != rm_GET_process(pkt_data, &sid_info, ip_layer_pt, qconf))
+	int process_result = rm_GET_process(pkt_data, &sid_info, ip_layer_pt, qconf);
+	rm_packet_result_t metric_result = get_metric_result(process_result);
+	if(RM_PROCESS_SUCCESS != process_result)
 	{
-		// STATUS
-		my_as_info->my_status->GET_stat.filtered_count++;
+		rm_metrics_record_result(RM_PACKET_GET, metric_result);
 		rte_pktmbuf_free(m);
 		return;
 	}
+	if (from_outside)
+		rm_metrics_add(RM_METRIC_GET_FROM_OUTSIDE, 1);
+	else
+		rm_metrics_add(RM_METRIC_GET_FROM_INSIDE, 1);
 	uint8_t dst_port;
 	uint32_t dst_ip;
 	if(sid_info->px == 0) // 提供者在本域
 	{
-		// STATUS
-		my_as_info->my_status->GET_stat.to_inside_count++;
+		rm_metrics_add(RM_METRIC_GET_TO_INSIDE, 1);
 
 		proxy_info_t *node = (proxy_info_t *)sid_info->node_pt;
 		dst_port = node->port;
 		dst_ip = node->ip_addr; // 下一跳IP地址是终端节点的IP地址
-
-		cli_print("The requested content is in this domain:\nprovider's NID = ");// DEBUG
-		show_data(node->nid, 16, false);
-		cli_print("; IP = %x; port: %d\n", node->ip_addr, dst_port);
 
 		// 开启数据泄漏检测时，返回CONTROL to BR to SYN SID
 		if(global_quick_check_strategy(STRATEGY_DATA_LEAKAGE_CHECK))
 		{
 			GET_front_t *get_pt = (GET_front_t *)pkt_data;
 			if (get_pt->PID_num > 0) {
-				cli_print("Send CONTROL_TAG_ODC to border router\n");
 				// get the BR
 				uint16_t px = (uint16_t)((*(uint32_t *)(pkt_data + (get_pt->pkg_len - 4))) >> 16);
 				search_px_result_t res_br;
@@ -59,7 +70,10 @@ process_get_packet(struct rte_mbuf *m, uint8_t portid, struct lcore_conf *qconf)
 
 				if(1 != as_store_search_px(px, &res_br))
 				{
-					cli_print("Bad PX: 0x%04x, cannot send CONTROL packet\n", px);
+					rm_metrics_record_result(RM_PACKET_GET,
+						RM_PACKET_RESULT_POLICY_DENIED);
+					RM_LOG_WARN(RM_LOG_MODULE_GET, RM_EVENT_GET_POLICY_DENIED,
+						dst_port, "PX 0x%04x has no border-router mapping", px);
 					rte_pktmbuf_free(m);
 					return;
 				}
@@ -77,6 +91,16 @@ process_get_packet(struct rte_mbuf *m, uint8_t portid, struct lcore_conf *qconf)
 
 				void *pkt_buf = rte_malloc(NULL, 128, 0);
 				void *con_buf = rte_malloc(NULL, 1024, 0);
+				if (pkt_buf == NULL || con_buf == NULL) {
+					rte_free(pkt_buf);
+					rte_free(con_buf);
+					rm_metrics_record_result(RM_PACKET_GET,
+						RM_PACKET_RESULT_NO_MEMORY);
+					RM_LOG_ERROR(RM_LOG_MODULE_GET, RM_EVENT_RESOURCE_EXHAUSTED,
+						dst_port, "unable to allocate data-leakage control packet");
+					rte_pktmbuf_free(m);
+					return;
+				}
 
 				*(uint32_t *)con_buf = rn; // random number
 				rte_memcpy(con_buf + 4, node->nid, 16); // nid of provider
@@ -96,17 +120,12 @@ process_get_packet(struct rte_mbuf *m, uint8_t portid, struct lcore_conf *qconf)
 	}
 	else // 提供者在其他域，将GET包转发给BR
 	{
-		// STATUS
-		my_as_info->my_status->GET_stat.to_outside_count++;
+		rm_metrics_add(RM_METRIC_GET_TO_OUTSIDE, 1);
 
 		br_info_t *node = (br_info_t *)sid_info->node_pt;
 		dst_port = node->port;
 		dst_ip = node->ip_addr;
 
-		// DEBUG
-		cli_print("The requested content is from other domain\nBR's NID = ");
-		show_data(node->nid, 16, false);
-		cli_print(" IP = %x; port = %d\n", dst_ip, dst_port);
 	}
 
 	uint8_t *dst_mac;
@@ -127,15 +146,24 @@ process_get_packet(struct rte_mbuf *m, uint8_t portid, struct lcore_conf *qconf)
 	if(NULL == (dst_mac = ip_mac_store_search(next_hop_ip)))
 	{
 		// if unable to find ip-mac, store pkt
-		unsend_buf_add(dst_ip, next_hop_ip, dst_port, m);
+        if (unsend_buf_add(dst_ip, next_hop_ip, dst_port, m) != 0) {
+            rm_metrics_record_result(RM_PACKET_GET, RM_PACKET_RESULT_NO_MEMORY);
+            return;
+        }
 
 		// send ARP request to require ip-mac
 		rte_eth_macaddr_get(dst_port, &port_mac_addr);
-		struct rte_mbuf *arp_pkt = construct_arp_req(my_as_info->port_ip[dst_port], next_hop_ip, port_mac_addr.addr_bytes);
-		send_single_packet(qconf, arp_pkt, dst_port);
-		return;
+        struct rte_mbuf *arp_pkt = construct_arp_req(my_as_info->port_ip[dst_port], next_hop_ip, port_mac_addr.addr_bytes);
+        if (arp_pkt == NULL)
+            rm_metrics_record_result(RM_PACKET_GET, RM_PACKET_RESULT_NO_MEMORY);
+        else {
+            send_single_packet(qconf, arp_pkt, dst_port);
+            rm_metrics_record_result(RM_PACKET_GET, RM_PACKET_RESULT_OK);
+        }
+        return;
 	}
 	rte_eth_macaddr_get(dst_port, &port_mac_addr);
 	my_setup_ether_header(eth_layer_pt, port_mac_addr.addr_bytes, dst_mac);
 	send_single_packet(qconf, m, dst_port);
+	rm_metrics_record_result(RM_PACKET_GET, RM_PACKET_RESULT_OK);
 }

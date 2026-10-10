@@ -6,6 +6,7 @@
 #include <signal.h>
 #include <unistd.h>
 #include <stdbool.h>
+#include <stdatomic.h>
 #include <rte_lcore.h>
 #include <rte_eal.h>
 #include <rte_mempool.h>
@@ -27,6 +28,8 @@
 #include "tables/rm_routing_table.h"
 #include "commandline/cli.h"
 #include "vendor/print.h"
+#include "telemetry/rm_log.h"
+#include "telemetry/rm_metrics.h"
 
 #define MEMPOOL_NAME "MBUF_POOL"
 #define NB_MBUF 8192
@@ -34,11 +37,11 @@
 #define NUM_MBUFS 8191
 #define MBUF_CACHE_SIZE 250
 
-volatile bool force_quit = false;
+_Atomic bool force_quit;
 
 static void signal_handler(int sig) {
     if (sig == SIGINT || sig == SIGTERM) {
-        force_quit = true;
+        atomic_store_explicit(&force_quit, true, memory_order_release);
     }
 }
 
@@ -131,7 +134,7 @@ worker_main(__attribute__((unused)) void *arg) {
     cur_tsc = rte_rdtsc();
 	prev_tsc = cur_tsc;
 
-    while (!force_quit) {
+    while (!atomic_load_explicit(&force_quit, memory_order_acquire)) {
     	/* 清空TX队列(发包) */
         diff_tsc = cur_tsc - prev_tsc;
         if(unlikely(diff_tsc > drain_tsc)) {
@@ -219,9 +222,10 @@ read_control_rm_config(char *filename, uint8_t *read_buf)
 // prepare data for RM
 int rm_prepare()
 {
-	ip_mac_store_initialize();
-	unsend_buf_initialize();
-	rm_data_initialize();
+	if (ip_mac_store_initialize() != 0 || unsend_buf_initialize() != 0)
+		return -1;
+	if (rm_data_initialize() != 0)
+		return -1;
 
 	read_ip_config("./rm_config");
 
@@ -245,14 +249,14 @@ int rm_prepare()
 			break;
 		}
 	}
+	return 0;
 }
 
 int init_broadcast_tx_pool(int nb_ports) {
     broadcast_tx_pool = rte_pktmbuf_pool_create("BROADCAST_TX_POOL", NUM_MBUFS * nb_ports,
 		MBUF_CACHE_SIZE, 0, RTE_MBUF_DEFAULT_BUF_SIZE, rte_socket_id());
-    if(broadcast_tx_pool == NULL) {
-        rte_exit(EXIT_FAILURE, "Cannot create broadcast tx pool\n");
-    }
+    if(broadcast_tx_pool == NULL)
+        return -1;
     return 0;
 }
 
@@ -270,24 +274,51 @@ int main(int argc, char **argv) {
     printf(RESET "");
     int ret;
 
+    atomic_init(&force_quit, false);
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
 
     init_eal(argc, argv);
+    rm_metrics_init();
+    if (rm_log_init() != 0)
+        rte_exit(EXIT_FAILURE, "Cannot initialize RM structured logging\n");
+    RM_LOG_INFO(RM_LOG_MODULE_APP, RM_EVENT_APP_STARTED, RM_LOG_PORT_NONE,
+        "RM process started");
 
     mbuf_pool = rte_pktmbuf_pool_create(MEMPOOL_NAME, NB_MBUF,
                                         MEMPOOL_CACHE_SIZE, 0,
                                         RTE_MBUF_DEFAULT_BUF_SIZE,
                                         rte_socket_id());
-    if (mbuf_pool == NULL)
+    if (mbuf_pool == NULL) {
+        RM_LOG_ERROR(RM_LOG_MODULE_APP, RM_EVENT_TABLE_INITIALIZATION_FAILED,
+            RM_LOG_PORT_NONE, "main packet pool initialization failed");
+        rm_log_shutdown();
         rte_exit(EXIT_FAILURE, "Cannot create mbuf pool\n");
+    }
 
-    init_port(0, mbuf_pool);
+    ret = init_port(0, mbuf_pool);
+    if (ret != 0) {
+        RM_LOG_ERROR(RM_LOG_MODULE_APP, RM_EVENT_TABLE_INITIALIZATION_FAILED,
+            0, "network port initialization failed: ret=%d", ret);
+        rm_log_shutdown();
+        rte_eal_cleanup();
+        rte_exit(EXIT_FAILURE, "Cannot initialize network port\n");
+    }
     init_lcore_conf();
-    init_broadcast_tx_pool(1);
+    if (init_broadcast_tx_pool(1) != 0) {
+        RM_LOG_ERROR(RM_LOG_MODULE_APP, RM_EVENT_TABLE_INITIALIZATION_FAILED,
+            RM_LOG_PORT_NONE, "broadcast packet pool initialization failed");
+        rm_log_shutdown();
+        rte_exit(EXIT_FAILURE, "Cannot create broadcast tx pool\n");
+    }
 
 
-    rm_prepare();
+    if (rm_prepare() != 0) {
+        RM_LOG_ERROR(RM_LOG_MODULE_APP, RM_EVENT_TABLE_INITIALIZATION_FAILED,
+            RM_LOG_PORT_NONE, "RM runtime data initialization failed");
+        rm_log_shutdown();
+        rte_exit(EXIT_FAILURE, "Cannot initialize RM runtime data\n");
+    }
     printf(BLUE "[>] Initialize strategy..\n");
     printf(RESET "");
 	global_quick_set_strategy(STRATEGY_SECURITY_LEVEL, true);
@@ -326,6 +357,13 @@ int main(int argc, char **argv) {
 
     rte_eal_mp_wait_lcore();
 
+    RM_LOG_INFO(RM_LOG_MODULE_APP, RM_EVENT_APP_STOPPING, RM_LOG_PORT_NONE,
+        "RM process stopping");
+    rm_log_shutdown();
+    if (my_as_info != NULL && my_as_info->my_status != NULL) {
+        status_destroy(my_as_info->my_status);
+        my_as_info->my_status = NULL;
+    }
     rte_eth_dev_stop(0);
     rte_eth_dev_close(0);
     rte_eal_cleanup();

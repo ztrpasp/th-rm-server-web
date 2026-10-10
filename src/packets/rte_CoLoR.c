@@ -1,5 +1,6 @@
 #include "packets/rte_CoLoR.h"
 #include "commandline/cli.h"
+#include "telemetry/rm_log.h"
 
 static void show_ANN(uint8_t *buf);
 static void show_GET(uint8_t *buf);
@@ -358,7 +359,9 @@ CONTROL_init(uint8_t *buf, uint8_t tag, uint16_t len, uint8_t *con_data)
 {
 	if(!buf)
 	{
-		cli_print("[#] CONTROL_init Failed!\n");
+		RM_LOG_ERROR(RM_LOG_MODULE_CONTROL, RM_EVENT_PACKET_MALFORMED,
+			RM_LOG_PORT_NONE, "CONTROL_init received a null output buffer");
+		return;
 	}
 	CONTROL_front_t *con_pt = (CONTROL_front_t *)buf;
 	con_pt->version_package = 0x74;

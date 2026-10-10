@@ -357,8 +357,10 @@ static void parse_display(void)
         graph_show_cli(my_as_info->as_graph);
     } else if (streql(s, "sid")) {
         parse_sid_list();
+    } else if (streql(s, "status")) {
+        status_show(my_as_info->my_status);
     } else {
-        info("Unknown display target. Try: display, display acl, display config, display graph, display sid\r\n");
+        info("Unknown display target. Try: display, display acl, display config, display graph, display sid, display status\r\n");
     }
 }
 
@@ -380,6 +382,8 @@ void parse_line(const char *s)
             "      Display ACL rules.\r\n"
             "  display sid\r\n"
             "      Display SID list.\r\n"
+            "  display status\r\n"
+            "      Display packet and proxy counters.\r\n"
             "  acl add id <num> action allow|deny sid <hex> asid <hex> nid <hex>\r\n"
             "      Add an ACL rule.\r\n"
             "  acl delete id <num>\r\n"

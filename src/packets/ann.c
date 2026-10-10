@@ -2,22 +2,26 @@
 // Created by lcf2001523@gmail.com on 25-5-16.
 //
 #include "packets/ann.h"
-#include "commandline/cli.h"
+#include "telemetry/rm_log.h"
+#include "telemetry/rm_metrics.h"
+
+static rm_packet_result_t
+ann_metric_result(int result)
+{
+    if (result == RM_ERR_CHECKSUM_UNPASSED)
+        return RM_PACKET_RESULT_BAD_CHECKSUM;
+    if (result == RM_ERR_NO_MEMORY)
+        return RM_PACKET_RESULT_NO_MEMORY;
+    if (result == RM_ERR_NULL_PT_INPUT)
+        return RM_PACKET_RESULT_MALFORMED;
+    return result == RM_PROCESS_SUCCESS ? RM_PACKET_RESULT_OK :
+        RM_PACKET_RESULT_INTERNAL_ERROR;
+}
 
 void
 process_ann_packet(struct rte_mbuf *m, uint8_t portid, struct lcore_conf *qconf)
 {
-    CLR_SCREEN();
-    cli_print(GREEN " $$$$$$\\  $$\\   $$\\ $$\\   $$\\ \n");
-    cli_print(GREEN "$$  __$$\\ $$$\\  $$ |$$$\\  $$ |\n");
-    cli_print(GREEN "$$ /  $$ |$$$$\\ $$ |$$$$\\ $$ |\n");
-    cli_print(GREEN "$$$$$$$$ |$$ $$\\$$ |$$ $$\\$$ |\n");
-    cli_print(GREEN "$$  __$$ |$$ \\$$$$ |$$ \\$$$$ |\n");
-    cli_print(GREEN "$$ |  $$ |$$ |\\$$$ |$$ |\\$$$ |\n");
-    cli_print(GREEN "$$ |  $$ |$$ | \\$$ |$$ | \\$$ |\n");
-    cli_print(GREEN "\\__|  \\__|\\__|  \\__|\\__|  \\__|\n");
-    cli_print(RESET "");
-    cli_print("Receive an ANN packet\n");
+    rm_metrics_record_rx(RM_PACKET_ANN);
 
     uint8_t *pkt_data = rte_pktmbuf_mtod_offset(m, uint8_t *, sizeof(struct rte_ether_hdr) + sizeof(struct rte_ipv4_hdr));
     // mid-data
@@ -27,12 +31,11 @@ process_ann_packet(struct rte_mbuf *m, uint8_t portid, struct lcore_conf *qconf)
     void *new_ann_array[32];
 
     // ANN stage 1 : parse and mark ANN format
-    if(RM_PROCESS_SUCCESS != rm_ANN_parse_store(pkt_data, mark_array, &as_px_result))
+    int parse_result = rm_ANN_parse_store(pkt_data, mark_array, &as_px_result);
+    if(RM_PROCESS_SUCCESS != parse_result)
     {
-        // STATUS
-        my_as_info->my_status->ANN_stat.filtered_count++;
+        rm_metrics_record_result(RM_PACKET_ANN, ann_metric_result(parse_result));
         rte_pktmbuf_free(m);
-        cli_print("The ANN packet is filtered(dropped).\n");
         return;
     }
 
@@ -40,19 +43,28 @@ process_ann_packet(struct rte_mbuf *m, uint8_t portid, struct lcore_conf *qconf)
     int num_px_units = rm_ANN_forward_px_units(pkt_data, mark_array, &as_px_result, px_unit_array);
     if(num_px_units <= 0)
     {
+        rm_metrics_record_result(RM_PACKET_ANN,
+            num_px_units < 0 ? RM_PACKET_RESULT_INTERNAL_ERROR : RM_PACKET_RESULT_OK);
         rte_pktmbuf_free(m);
         return;
     }
 
-    show_px_unit_array(px_unit_array);
-
     // ANN stage 3 :
-    for(int i = 0; i < num_px_units; i++)
+    for(int i = 0; i < num_px_units; i++) {
         new_ann_array[i] = rte_malloc(NULL, 256, 0);
+        if (new_ann_array[i] == NULL) {
+            for (int j = 0; j < i; j++)
+                rte_free(new_ann_array[j]);
+            rm_metrics_record_result(RM_PACKET_ANN, RM_PACKET_RESULT_NO_MEMORY);
+            RM_LOG_ERROR(RM_LOG_MODULE_ANN, RM_EVENT_RESOURCE_EXHAUSTED,
+                portid, "unable to allocate forwarded ANN buffer");
+            rte_pktmbuf_free(m);
+            return;
+        }
+    }
     rm_ANN_construct_ann(pkt_data, mark_array, px_unit_array, new_ann_array);
 
-    // STATUS
-    my_as_info->my_status->ANN_stat.outbound_count += num_px_units;
+    rm_metrics_add(RM_METRIC_ANN_OUTBOUND, num_px_units);
 
     // broadcast
     for(int i = 0; i < num_px_units; i++)
@@ -70,5 +82,6 @@ process_ann_packet(struct rte_mbuf *m, uint8_t portid, struct lcore_conf *qconf)
         rte_free(new_ann_array[i]);
     }
 
+    rm_metrics_record_result(RM_PACKET_ANN, RM_PACKET_RESULT_OK);
     rte_pktmbuf_free(m);
 }

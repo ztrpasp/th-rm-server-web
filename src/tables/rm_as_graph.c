@@ -70,18 +70,16 @@ graph_trace(graph_t *tar, void *pid_start, int pid_count, uint8_t as_ans[])
     if(!tar || !pid_start || pid_count <= 0 || !as_ans)
         return -1;
     
-    int i, ans_count;
+    int ans_count;
     void *ppt;
     graph_as_t *apt;
     graph_px_t *check, buf;
-    uint8_t now_aid;
     uint16_t npx;
 
     for(ppt = pid_start + ((pid_count - 1) * 4), apt = (tar->as_data)[0], ans_count = 0; ; )
     {
         npx = (*(uint32_t *)ppt) >> 16;
         // search the px_tree
-        now_aid = apt->aid;
         buf.px = npx;
         if((check = (graph_px_t *)jsw_rbfind(apt->px_data, &buf)) != NULL)
         {
@@ -106,19 +104,16 @@ graph_trace_px(graph_t *tar, void *px_start, int px_count, uint8_t as_ans[])
     if(!tar || !px_start || px_count <= 0 || !as_ans)
         return -1;
     
-    int i, ans_count;
+    int ans_count;
     void *ppt;
     graph_as_t *apt;
     graph_px_t *check, buf;
-    uint8_t now_aid;
     uint16_t npx;
 
     for(ppt = px_start + ((px_count - 1) * 2), apt = (tar->as_data)[0], ans_count = 0; ; )
     {
         npx = *(uint16_t *)ppt;
-        cli_print("trace PX %x\n", npx);
         // search the px_tree
-        now_aid = apt->aid;
         buf.px = npx;
         if((check = (graph_px_t *)jsw_rbfind(apt->px_data, &buf)) != NULL)
         {

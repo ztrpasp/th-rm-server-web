@@ -17,6 +17,7 @@
 #include <rte_arp.h>
 #include "process/send.h"
 #include "tables/rm_routing_table.h"
+#include "telemetry/rm_log.h"
 #include "vendor/print.h"
 
 
@@ -197,30 +198,48 @@ my_setup_ether_header(struct rte_ether_hdr *eth_hdr, uint8_t *src_mac, uint8_t *
 static int
 unsend_buf_initialize()
 {
-	unsend_store = (unsend_buf_t *)rte_malloc(NULL, sizeof(unsend_buf_t), 0);
-	unsend_store->head_node = (unsend_pkt_t *)rte_malloc(NULL, sizeof(unsend_pkt_t), 0);
-	unsend_store->head_node->next = NULL;
-	unsend_store->tail_node = unsend_store->head_node;
-	if(unsend_store != NULL && unsend_store->head_node != NULL){
-		printf(GREEN "[+] Unsendbuf Initialized Successfully!\n");
-		printf(RESET "");
-		return 0;
-	}
+    unsend_store = (unsend_buf_t *)rte_zmalloc(
+        "rm_unsent_store", sizeof(unsend_buf_t), 0);
+    if (unsend_store == NULL) {
+        RM_LOG_ERROR(RM_LOG_MODULE_TABLE, RM_EVENT_TABLE_INITIALIZATION_FAILED,
+            RM_LOG_PORT_NONE, "unsent packet queue initialization failed");
+        return -1;
+    }
+    unsend_store->head_node = (unsend_pkt_t *)rte_malloc(NULL, sizeof(unsend_pkt_t), 0);
+    if (unsend_store->head_node == NULL) {
+        rte_free(unsend_store);
+        unsend_store = NULL;
+        RM_LOG_ERROR(RM_LOG_MODULE_TABLE, RM_EVENT_TABLE_INITIALIZATION_FAILED,
+            RM_LOG_PORT_NONE, "unsent packet queue head allocation failed");
+        return -1;
+    }
+    unsend_store->head_node->next = NULL;
+    unsend_store->tail_node = unsend_store->head_node;
+    RM_LOG_INFO(RM_LOG_MODULE_TABLE, RM_EVENT_TABLE_INITIALIZED,
+        RM_LOG_PORT_NONE, "unsent packet queue initialized");
+    return 0;
 }
 
-static void
+static int
 unsend_buf_add(uint32_t d_ip, uint32_t next_hop_ip, uint32_t d_port, struct rte_mbuf *pkt)
 {
-	unsend_pkt_t *new_pkt = (unsend_pkt_t *)rte_malloc(NULL, sizeof(unsend_pkt_t), 0);
-	
+    unsend_pkt_t *new_pkt = (unsend_pkt_t *)rte_malloc(NULL, sizeof(unsend_pkt_t), 0);
+    if (new_pkt == NULL) {
+        rte_pktmbuf_free(pkt);
+        RM_LOG_ERROR(RM_LOG_MODULE_TABLE, RM_EVENT_RESOURCE_EXHAUSTED,
+            d_port, "unable to queue packet awaiting ARP resolution");
+        return -1;
+    }
+
 	new_pkt->ip_addr = d_ip;
 	new_pkt->next_hop_ip = next_hop_ip;
 	new_pkt->port = d_port;
 	new_pkt->pkt = pkt;
 	new_pkt->next = NULL;
 
-	unsend_store->tail_node->next = new_pkt;
-	unsend_store->tail_node = new_pkt;
+    unsend_store->tail_node->next = new_pkt;
+    unsend_store->tail_node = new_pkt;
+    return 0;
 }
 
 static void
@@ -275,7 +294,12 @@ extern struct rte_mempool *broadcast_tx_pool;
 static struct rte_mbuf *
 construct_arp_req(uint32_t src_ip, uint32_t dst_ip, uint8_t *my_src_mac)
 {
-	struct rte_mbuf *pkt = (struct rte_mbuf *)rte_pktmbuf_alloc((struct rte_mempool *)broadcast_tx_pool);
+    struct rte_mbuf *pkt = (struct rte_mbuf *)rte_pktmbuf_alloc((struct rte_mempool *)broadcast_tx_pool);
+    if (pkt == NULL) {
+        RM_LOG_ERROR(RM_LOG_MODULE_ARP, RM_EVENT_RESOURCE_EXHAUSTED,
+            RM_LOG_PORT_NONE, "unable to allocate ARP request packet");
+        return NULL;
+    }
 	
 	struct rte_ether_hdr eth_layer;
 	struct rte_arp_hdr arp_layer;
