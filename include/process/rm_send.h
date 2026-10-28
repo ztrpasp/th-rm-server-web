@@ -105,11 +105,18 @@ copy_buf_to_pkt(void* buf, unsigned len, struct rte_mbuf *pkt, unsigned offset)
 	copy_buf_to_pkt_segs(buf, len, pkt, offset);
 }
 
+/*
+ * 重算 IPv4 头校验和。rte_raw_cksum 会把 hdr_checksum 字段本身也加进去，
+ * 必须先清零（DPDK 的 rte_ipv4_cksum 对调用方有同样的要求）。
+ * 不清零时：转发 GET 复用收到的 IP 头，旧校验和被算进去，结果必错，
+ * Windows 终端在 IP 层直接丢包；新建 IP 头（pkt.h 的栈变量）则取决于栈上残留值。
+ */
 static inline void
 calculate_checksum_for_ip(struct rte_ipv4_hdr *ip_hdr)
 {
 	uint16_t cksum;
 
+	ip_hdr->hdr_checksum = 0;
 	cksum = rte_raw_cksum(ip_hdr, sizeof(struct rte_ipv4_hdr));
 	cksum = (cksum == 0xffff) ? cksum : (uint16_t)~cksum;
 	ip_hdr->hdr_checksum = cksum;
