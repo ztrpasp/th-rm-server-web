@@ -69,6 +69,19 @@ RM_LOG_ROTATE_FILES=5         # 历史文件数量，默认 5
 计数器为准。`display status` 中还包含总 RX/TX、非 IPv4、非 CoLoR、未支持类型和
 TX 丢弃等运行指标。
 
+### 演示开关：攻击者 AS
+
+查不到 SID 的 GET 默认直接丢弃（计入 `sid_not_found`）。演示「攻击者 AS 发出非法 GET」时，
+可以在那台 RM 上设置：
+
+```bash
+RM_DEMO_FORWARD_UNKNOWN_SID=1   # 只认 1；查不到 SID 的 GET 改为转给第一个邻居 AS 的第一个 BR
+```
+
+这个行为以前写死为「aid 为 1 的 RM 一律开启」。在 AS1 是正式域的部署里，它会把查不到
+SID 的 GET 转出本域，而且每个这样的 GET 都会泄漏一块内存，所以现在改成显式开启。
+正式部署不要设置这个变量。
+
 ### Web 可视化监控
 
 RM 默认启动 Web 监控服务，监听 `127.0.0.1:8080`，浏览器打开该地址即可查看

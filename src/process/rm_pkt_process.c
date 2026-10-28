@@ -1,3 +1,8 @@
+#include <stdlib.h>
+#include <string.h>
+
+#include <rte_per_lcore.h>
+
 #include "process/rm_pkt_process.h"
 #include "tables/rm_tables.h"
 #include "packets/pkt.h"
@@ -652,6 +657,53 @@ rm_GET_check_filter(void *pkt, sid_info_t *search_res)
     return 0;
 }
 
+/*
+ * 演示开关："攻击者 AS"——查不到 SID 的 GET 不丢弃，转给第一个邻居 AS 的第一个 BR，
+ * 用来演示下游能否识别非法 GET。只有设置了 RM_DEMO_FORWARD_UNKNOWN_SID=1 的 RM 才开启，
+ * 默认关闭。
+ *
+ * 原先写死为"aid == 1 的 RM 一律开启"：在 AS1 是正式域的部署里，查不到 SID 的 GET
+ * 会被转出本域（计数器还记成转发成功），并且每个这样的 GET 都 rte_malloc 一个
+ * sid_info_t、从不释放。
+ */
+static bool
+demo_forward_unknown_sid_enabled(void)
+{
+    // 只读一次环境变量；多个 lcore 同时首次读取，得到的也是同一个值
+    static int cached = -1;
+
+    if (cached < 0) {
+        const char *value = getenv("RM_DEMO_FORWARD_UNKNOWN_SID");
+        cached = (value != NULL && strcmp(value, "1") == 0) ? 1 : 0;
+    }
+    return cached == 1;
+}
+
+// 演示模式下伪造的转发目标：每个 lcore 一份，只在处理当前这个 GET 期间使用，不需要释放
+static RTE_DEFINE_PER_LCORE(sid_info_t, demo_unknown_sid_node);
+
+static sid_info_t *
+demo_unknown_sid_target(void)
+{
+    if (as_store.as_array == NULL || as_store.as_array->count == 0)
+        return NULL;
+    as_info_t *apt = (as_info_t *)(as_store.as_array->data);
+    if (apt->connect_array == NULL || apt->connect_array->count == 0)
+        return NULL;
+    connect_info_t *cpt = (connect_info_t *)(apt->connect_array->data);
+    if (cpt->br_pt == NULL || cpt->px_array == NULL ||
+        cpt->px_array->count == 0 || cpt->px_array->data == NULL)
+        return NULL;
+
+    sid_info_t *node = &RTE_PER_LCORE(demo_unknown_sid_node);
+    node->node_pt = cpt->br_pt;
+    node->px = *(uint16_t *)cpt->px_array->data;
+    node->as_path_len = 0;
+    node->strategy_array = NULL;
+    node->next = NULL;
+    return node;
+}
+
 int
 rm_GET_process(void *pkt, sid_info_t **node_pt, struct rte_ipv4_hdr *ip_layer_pt, struct lcore_conf *qconf)
 {
@@ -752,42 +804,17 @@ rm_GET_process(void *pkt, sid_info_t **node_pt, struct rte_ipv4_hdr *ip_layer_pt
 
         }
 
+        // 查不到 SID 一律丢弃；只有显式打开演示开关时才转给第一个 BR（见 demo_forward_unknown_sid_enabled）
+        if(!demo_forward_unknown_sid_enabled() ||
+            (search_node = demo_unknown_sid_target()) == NULL)
+        {
+            RM_LOG_WARN(RM_LOG_MODULE_GET, RM_EVENT_GET_SID_NOT_FOUND,
+                RM_LOG_PORT_NONE, "GET SID was not found");
+            return RM_GET_SID_UNFOUND;
+        }
         RM_LOG_WARN(RM_LOG_MODULE_GET, RM_EVENT_GET_SID_NOT_FOUND,
-            RM_LOG_PORT_NONE, "GET SID was not found");
-        
-        // Presentation: as 1 add attacker function
-        if(my_as_info->aid != 1)
-            return RM_GET_SID_UNFOUND;
-
-        // check if as_array is empty
-        if(as_store.as_array->count == 0)
-            return RM_GET_SID_UNFOUND;
-        
-        search_node = (sid_info_t *)rte_malloc(NULL, sizeof(sid_info_t), 0);
-        if(!search_node)
-            return RM_ERR_NO_MEMORY;
-            
-        // forward to the first br of the first as
-        as_info_t *apt = (as_info_t *)(as_store.as_array->data);
-        // check if connect_array is empty
-        if(apt->connect_array->count == 0)
-        {
-            rte_free(search_node);
-            return RM_GET_SID_UNFOUND;
-        }
-        
-        connect_info_t *cpt = (connect_info_t *)(apt->connect_array->data);
-        // check if br_pt is NULL or px_array is empty or data is NULL
-        if(cpt->br_pt == NULL || cpt->px_array->count == 0 || cpt->px_array->data == NULL)
-        {
-            rte_free(search_node);
-            return RM_GET_SID_UNFOUND;
-        }
-        
-        search_node->node_pt = cpt->br_pt;
-        search_node->px = *(uint16_t *)cpt->px_array->data;
-        search_node->strategy_array = NULL;
-        search_node->next = NULL;
+            RM_LOG_PORT_NONE,
+            "GET SID was not found, forwarded to first BR (RM_DEMO_FORWARD_UNKNOWN_SID=1)");
     }
 
     uint8_t acl_sid[RM_ACL_SID_LEN];
