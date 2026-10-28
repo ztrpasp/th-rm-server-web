@@ -62,7 +62,6 @@ rte_array_update(rte_array_t *ans, int index, void *element)
 {
     if(!ans || index < 0 || index >= ans->count || !element)
         return -1;
-    int size = ans->element_size, count = ans->count, max = ans->max_count;
     rte_memcpy(ans->data + ans->element_size * index,
                 element, ans->element_size);
     return 1;
@@ -73,10 +72,9 @@ rte_array_delete(rte_array_t *ans, int index)
 {
     if(!ans || index < 0 || index >= ans->count)
         return -1;
-    int size = ans->element_size, count = ans->count, max = ans->max_count;
-    rte_memcpy(ans->data + size * index,
-            ans->data + size * (index + 1), 
-            (count - index - 1) * size);
+    rte_memcpy(ans->data + ans->element_size * index,
+            ans->data + ans->element_size * (index + 1),
+            (ans->count - index - 1) * ans->element_size);
     ans->count--;
     return 1;
 }

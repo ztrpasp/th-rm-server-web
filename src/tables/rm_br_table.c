@@ -30,7 +30,6 @@ br_store_insert(br_info_t *target)
 {
     if(target == NULL)
         return -1;
-    int ret;
     if(0 == jsw_rbinsert(br_store.store_data, (void *)target))
         return -1;
     else

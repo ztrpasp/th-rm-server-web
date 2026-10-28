@@ -3,6 +3,7 @@
  * Description: RM application entry point
  */
 #include <stdio.h>
+#include <ctype.h>
 #include <signal.h>
 #include <unistd.h>
 #include <stdbool.h>
@@ -30,6 +31,7 @@
 #include "vendor/print.h"
 #include "telemetry/rm_log.h"
 #include "telemetry/rm_metrics.h"
+#include "telemetry/rm_web.h"
 
 #define MEMPOOL_NAME "MBUF_POOL"
 #define NB_MBUF 8192
@@ -229,7 +231,6 @@ int rm_prepare()
 
 	read_ip_config("./rm_config");
 
-	int portid;
 	uint8_t read_buf[4096];
 	for(int portid = 0; portid < 32; portid++)
 	{
@@ -319,6 +320,12 @@ int main(int argc, char **argv) {
         rm_log_shutdown();
         rte_exit(EXIT_FAILURE, "Cannot initialize RM runtime data\n");
     }
+    if (rm_web_start() != 0) {
+        RM_LOG_ERROR(RM_LOG_MODULE_APP, RM_EVENT_WEB_START_FAILED,
+            RM_LOG_PORT_NONE, "web monitor initialization failed");
+        rm_log_shutdown();
+        rte_exit(EXIT_FAILURE, "Cannot initialize RM web monitor\n");
+    }
     printf(BLUE "[>] Initialize strategy..\n");
     printf(RESET "");
 	global_quick_set_strategy(STRATEGY_SECURITY_LEVEL, true);
@@ -357,6 +364,7 @@ int main(int argc, char **argv) {
 
     rte_eal_mp_wait_lcore();
 
+    rm_web_stop();
     RM_LOG_INFO(RM_LOG_MODULE_APP, RM_EVENT_APP_STOPPING, RM_LOG_PORT_NONE,
         "RM process stopping");
     rm_log_shutdown();

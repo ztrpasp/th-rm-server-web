@@ -305,12 +305,21 @@ rotate_log_file_if_needed(void)
 
     fclose(log_file);
     log_file = NULL;
+
+    // Calculate effective path length to avoid truncation warnings
+    // Reserve enough space for ".<MAX_UINT>\0" which is at most 12 chars ("." + 10 digits + "\0")
+    size_t base_path_len = strnlen(log_file_path, sizeof(log_file_path));
+    if (base_path_len > sizeof(log_file_path) - 12) {
+        base_path_len = sizeof(log_file_path) - 12;
+    }
+
+
     for (unsigned i = log_rotate_files; i > 1; i--) {
-        snprintf(source, sizeof(source), "%s.%u", log_file_path, i - 1);
-        snprintf(target, sizeof(target), "%s.%u", log_file_path, i);
+        snprintf(source, sizeof(source), "%.*s.%u", (int)base_path_len, log_file_path, i - 1);
+        snprintf(target, sizeof(target), "%.*s.%u", (int)base_path_len, log_file_path, i);
         rename(source, target);
     }
-    snprintf(target, sizeof(target), "%s.1", log_file_path);
+    snprintf(target, sizeof(target), "%.*s.1", (int)base_path_len, log_file_path);
     rename(log_file_path, target);
     log_file = fopen(log_file_path, "a");
 }

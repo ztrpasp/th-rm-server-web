@@ -32,7 +32,6 @@ proxy_store_insert(proxy_info_t *target)
 {
     if(target == NULL)
         return -1;
-    int ret;
     if(0 == jsw_rbinsert(proxy_store.store_data, (void *)target))
         return -1;
     else

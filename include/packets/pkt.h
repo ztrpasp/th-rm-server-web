@@ -11,7 +11,7 @@
 #include "tables/rm_routing_table.h"
 #include "telemetry/rm_log.h"
 
-__rte_always_inline int
+static __rte_always_inline int
 rm_search_ip_return_port(uint32_t ip_addr)
 {
     int i;
@@ -23,7 +23,7 @@ rm_search_ip_return_port(uint32_t ip_addr)
 
 /** 从内存池中分配mbuf，并用 \b buf 的数据构造新的pkt。查ARP表，如果存在 \b dst_ip 对应的表项，
  * 发送新构造的数据包到端口 \b port ；否则，构造一个ARP请求报文并发送到端口 \b port 。 */
-__rte_always_inline void
+static __rte_always_inline void
 rm_send_new_ip_pkt(struct lcore_conf* qconf, void* buf, int len,
                    int src_ip, int dst_ip, uint8_t* src_mac, int port)
 {
@@ -86,7 +86,7 @@ rm_send_new_ip_pkt(struct lcore_conf* qconf, void* buf, int len,
 }
 
 /** 将 \b buf 指向的控制报文的头部及数据保存到文件 \b filename 中。 */
-__rte_always_inline void
+static __rte_always_inline void
 store_control_rm_config(char *filename, uint8_t *buf)
 {
     int offset = 0, len;
@@ -123,7 +123,7 @@ store_control_rm_config(char *filename, uint8_t *buf)
 }
 
 /** 发送配置信息（SK，AS-PX-IP）给BR */
-__rte_always_inline void
+static __rte_always_inline void
 send_config_br(struct lcore_conf *qconf)
 {
     // SYN topology config to BRs
@@ -165,7 +165,7 @@ send_config_br(struct lcore_conf *qconf)
 }
 
 /** 发送config_rm确认 */
-__rte_always_inline void
+static __rte_always_inline void
 send_control_config_rm_ack(uint8_t dst_port, uint32_t dst_ip, struct lcore_conf *qconf)
 {
     uint32_t src_ip = my_as_info->port_ip[dst_port];

@@ -65,8 +65,9 @@ void rm_metrics_init(void);
 void rm_metrics_add(rm_metric_id_t metric, uint64_t value);
 void rm_metrics_record_rx(rm_packet_type_t type);
 void rm_metrics_record_result(rm_packet_type_t type, rm_packet_result_t result);
-void rm_metrics_record_trace(rm_packet_type_t type, uint8_t aid);
+void rm_metrics_record_trace(rm_packet_type_t type, uint16_t aid);
 int rm_metrics_read_snapshot(rm_metrics_snapshot_t *out);
+const char *rm_metric_name(rm_metric_id_t metric);
 const char *rm_packet_type_name(rm_packet_type_t type);
 const char *rm_packet_result_name(rm_packet_result_t result);
 

@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stdatomic.h>
 
 #include "vendor/rte_array.h"
 
@@ -22,6 +23,9 @@ typedef struct rm_acl_rule
     uint8_t sid[RM_ACL_SID_LEN];
     uint32_t asid;
     uint8_t nid[RM_ACL_NID_LEN];
+    // 匹配命中计数，由数据面写入、管理面读取（原子访问）
+    _Atomic uint64_t allow_hits;
+    _Atomic uint64_t deny_hits;
 } rm_acl_rule_t;
 
 typedef struct rm_acl_store

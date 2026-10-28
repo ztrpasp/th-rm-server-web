@@ -142,17 +142,18 @@ static void basic_info_show_cli(void)
     cli_print("=================================\n\n");
 }
 
-static void show_single_px_cli(void *px)
+static int show_single_px_cli(void *px)
 {
-    if (!px) return;
+    if (!px) return 0;
     char buf[32];
     snprintf(buf, sizeof(buf), "0x%x ", *(uint16_t *)px);
     info(buf);
+    return 0;
 }
 
-static void show_single_con_cli(void *con)
+static int show_single_con_cli(void *con)
 {
-    if (!con) return;
+    if (!con) return 0;
     connect_info_t *ct = (connect_info_t *)con;
     
     cli_print("    BR: ");
@@ -163,14 +164,16 @@ static void show_single_con_cli(void *con)
     cli_print("        PX:   ");
     rte_array_loop_function(ct->px_array, show_single_px_cli);
     cli_print("\n");
+    return 0;
 }
 
-static void show_single_as_cli(void *as)
+static int show_single_as_cli(void *as)
 {
-    if (!as) return;
+    if (!as) return 0;
     as_info_t *at = (as_info_t *)as;
     cli_print("  --- AS %d ---\n", at->aid);
     rte_array_loop_function(at->connect_array, show_single_con_cli);
+    return 0;
 }
 
 static void as_store_show_cli(void)

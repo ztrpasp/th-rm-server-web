@@ -169,7 +169,6 @@ as_store_ret_as_px_ip_list(void *buf) //modified
         return -1;
     const int as_px_ip_len = 13;
     uint8_t *pt = buf;
-    br_info_t *br_pt;
     as_info_t *as_pt;
     connect_info_t *con_pt;
     uint8_t *as_pt_start = as_store.as_array->data, *con_pt_start, *px_start;

@@ -22,8 +22,7 @@ process_arp_packet(struct rte_mbuf *m, uint8_t portid, struct lcore_conf *qconf)
         if(dst_port == -1)
         {
             rm_metrics_record_result(RM_PACKET_ARP, RM_PACKET_RESULT_POLICY_DENIED);
-            RM_LOG_WARN(RM_LOG_MODULE_ARP, RM_EVENT_ARP_UNRESOLVED,
-                portid, "ARP request has no RM port mapping");
+            // RM_LOG_WARN(RM_LOG_MODULE_ARP, RM_EVENT_ARP_UNRESOLVED, portid, "ARP request has no RM port mapping");
             rte_pktmbuf_free(m);
             return;
         }
@@ -68,8 +67,7 @@ process_arp_packet(struct rte_mbuf *m, uint8_t portid, struct lcore_conf *qconf)
     else
     {
         rm_metrics_record_result(RM_PACKET_ARP, RM_PACKET_RESULT_MALFORMED);
-        RM_LOG_WARN(RM_LOG_MODULE_ARP, RM_EVENT_ARP_MALFORMED,
-            portid, "unsupported ARP opcode");
+        // RM_LOG_WARN(RM_LOG_MODULE_ARP, RM_EVENT_ARP_MALFORMED, portid, "unsupported ARP opcode");
         rte_pktmbuf_free(m);
     }
 }

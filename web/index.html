@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RM 资源管理器 - 运行监控</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <aside class="hw-sidebar" id="sidebar">
+    <div class="hw-brand">
+      <div class="hw-brand-mark">RM</div>
+      <div class="hw-brand-text"><strong>资源管理器</strong><span>RESOURCE MANAGER</span></div>
+      <button id="sidebar-toggle" class="hw-sidebar-toggle" type="button" aria-label="收起菜单" title="收起菜单">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15.4 7.4 14 6l-6 6 6 6 1.4-1.4-4.6-4.6z"/></svg>
+      </button>
+    </div>
+
+    <div class="hw-nav-caption">运行监控</div>
+    <nav class="hw-nav" aria-label="监控栏目">
+      <button class="hw-nav-item active" type="button" data-page="overview" aria-current="page" title="运行概览">
+        <span class="hw-nav-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3h8v8H3V3zm10 0h8v5h-8V3zM3 13h8v8H3v-8zm10-3h8v11h-8V10z"/></svg></span><span class="hw-nav-label">运行概览</span>
+      </button>
+      <button class="hw-nav-item" type="button" data-page="metrics" title="运行指标">
+        <span class="hw-nav-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19h16v2H2V3h2v16zm3-2H5v-5h2v5zm5 0h-2V7h2v10zm5 0h-2v-8h2v8zm5 0h-2V4h2v13z"/></svg></span><span class="hw-nav-label">运行指标</span>
+      </button>
+      <button class="hw-nav-item" type="button" data-page="packet-stats" title="报文统计">
+        <span class="hw-nav-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2 3 6.5v11L12 22l9-4.5v-11L12 2zm0 2.2 5.9 2.9L12 10 6.1 7.1 12 4.2zm-7 4.5 6 3v7.7l-6-3V8.7zm8 10.7v-7.7l6-3v7.7l-6 3z"/></svg></span><span class="hw-nav-label">报文统计</span>
+      </button>
+      <button class="hw-nav-item" type="button" data-page="ports" title="端口状态">
+        <span class="hw-nav-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 2h10v4h3a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-3v2H7v-2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h3V2zm2 2v2h6V4H9zm-5 4v10h16V8H4zm3 2h2v6H7v-6zm4 0h2v6h-2v-6zm4 0h2v6h-2v-6z"/></svg></span><span class="hw-nav-label">端口状态</span>
+      </button>
+      <button class="hw-nav-item" type="button" data-page="log-stats" title="日志队列">
+        <span class="hw-nav-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 3h16a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zm2 4v2h12V7H6zm0 4v2h12v-2H6zm0 4v2h8v-2H6z"/></svg></span><span class="hw-nav-label">日志队列</span>
+      </button>
+      <button class="hw-nav-item" type="button" data-page="traces" title="报文追踪">
+        <span class="hw-nav-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a7 7 0 0 0-7 7c0 5.2 7 13 7 13s7-7.8 7-13a7 7 0 0 0-7-7zm0 10a3 3 0 1 1 0-6 3 3 0 0 1 0 6z"/></svg></span><span class="hw-nav-label">报文追踪</span>
+      </button>
+      <button class="hw-nav-item" type="button" data-page="sid-acl" title="资源管理">
+        <span class="hw-nav-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2 4 5v6c0 5.1 3.4 9.8 8 11 4.6-1.2 8-5.9 8-11V5l-8-3zm-1.2 13.6-3.2-3.2 1.4-1.4 1.8 1.8 4.6-4.6 1.4 1.4-6 6z"/></svg></span><span class="hw-nav-label">资源管理</span>
+      </button>
+      <button class="hw-nav-item" type="button" data-page="logs" title="系统日志">
+        <span class="hw-nav-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 2h11l5 5v15H4V2zm10 2v4h4l-4-4zM7 11v2h10v-2H7zm0 4v2h10v-2H7z"/></svg></span><span class="hw-nav-label">系统日志</span>
+      </button>
+      
+    </nav>
+
+    <div class="hw-sidebar-footer"><i class="hw-live-dot"></i><span>数据每 2 秒自动更新</span></div>
+  </aside>
+
+  <main class="hw-main">
+    <header class="hw-header">
+      <div class="hw-breadcrumb"><span>RM 控制台</span><i>/</i><strong id="current-page">运行概览</strong></div>
+      <div class="hw-header-actions">
+        <span class="hw-endpoint"><i class="hw-dot"></i><span id="endpoint">127.0.0.1:8080</span></span>
+        <button id="refresh-now" class="hw-btn-icon" type="button" title="立即刷新" aria-label="立即刷新">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8.1 8.1 0 0 0-14.9-3.9L3 9m0 0V4m0 5h5M4 13a8.1 8.1 0 0 0 14.9 3.9L21 15m0 0v5m0-5h-5"/></svg>
+        </button>
+        <div id="connection" class="hw-status hw-status-pending"><i></i><span>连接中</span></div>
+        <div class="hw-user" title="Resource Manager">RM</div>
+      </div>
+    </header>
+
+    <div class="hw-content">
+      <div class="hw-page-title">
+        <div>
+          <h1 id="page-title">运行概览</h1>
+          <p id="page-description">实时查看 RM 服务状态和数据面关键运行情况。</p>
+        </div>
+        <span class="hw-page-refresh"><i class="hw-live-dot"></i>自动刷新已开启</span>
+      </div>
+
+      <section class="hw-view active" data-view="overview">
+        <section class="hw-panel" aria-label="服务状态">
+          <div class="hw-panel-header"><h2>服务状态与快照</h2><span id="snapshot-time" class="hw-panel-meta">等待数据</span></div>
+          <div id="health-fields" class="hw-kv-grid"><div class="empty">等待服务状态</div></div>
+        </section>
+        <section class="hw-cards" aria-label="关键运行指标">
+          <article class="hw-card hw-card-rx"><div class="hw-card-icon">↓</div><div class="hw-card-body"><span class="hw-card-label">接收数据包</span><strong id="rx-packets">—</strong><span class="hw-card-unit">packets</span></div></article>
+          <article class="hw-card hw-card-tx"><div class="hw-card-icon">↑</div><div class="hw-card-body"><span class="hw-card-label">发送数据包</span><strong id="tx-packets">—</strong><span class="hw-card-unit">packets</span></div></article>
+          <article class="hw-card hw-card-drop"><div class="hw-card-icon">!</div><div class="hw-card-body"><span class="hw-card-label">发送丢弃</span><strong id="tx-dropped">—</strong><span class="hw-card-unit">packets</span></div></article>
+          <article class="hw-card hw-card-filtered"><div class="hw-card-icon">⌁</div><div class="hw-card-body"><span class="hw-card-label">ANN + GET 过滤计数</span><strong id="filtered">—</strong><span class="hw-card-unit">packets</span></div></article>
+        </section>
+        <section class="hw-panel">
+          <div class="hw-panel-header"><h2>RX/TX 累计包数采样</h2><div class="hw-panel-meta"><span id="sample-state">等待采样</span><span class="hw-updated"><i></i><span id="updated-at">等待数据</span></span></div></div>
+          <div class="hw-chart-wrap"><div class="hw-chart-y-labels"><span>100%</span><span>75%</span><span>50%</span><span>25%</span><span>0</span></div><canvas id="traffic-chart" aria-label="RX/TX 累计包数采样趋势图"></canvas></div>
+          <div class="hw-legend"><span><i class="hw-dot rx"></i>接收 RX</span><span><i class="hw-dot tx"></i>发送 TX</span><span class="hw-legend-note">相对最近窗口峰值，最多 60 个采样点</span></div>
+        </section>
+      </section>
+
+      <section class="hw-view" data-view="metrics">
+        <section class="hw-cards" aria-label="总体概览">
+          <article class="hw-card hw-card-rx"><div class="hw-card-icon">↓</div><div class="hw-card-body"><span class="hw-card-label">接收总包数</span><strong id="metric-rx-total">—</strong><span class="hw-card-unit">packets</span></div></article>
+          <article class="hw-card hw-card-tx"><div class="hw-card-icon">↑</div><div class="hw-card-body"><span class="hw-card-label">发送总包数</span><strong id="metric-tx-total">—</strong><span class="hw-card-unit">packets</span></div></article>
+          <article class="hw-card hw-card-drop"><div class="hw-card-icon">!</div><div class="hw-card-body"><span class="hw-card-label">发送丢弃</span><strong id="metric-tx-dropped">—</strong><span class="hw-card-unit">packets</span></div></article>
+          <article class="hw-card hw-card-filtered"><div class="hw-card-icon">⌁</div><div class="hw-card-body"><span class="hw-card-label">接收异常</span><strong id="metric-rx-anomaly">—</strong><span class="hw-card-unit">非 IPv4 / 非 CoLoR / 不支持</span></div></article>
+        </section>
+
+        <div class="hw-metric-grid">
+          <section class="hw-panel hw-metric-panel">
+            <div class="hw-panel-header"><h2><span class="hw-type-badge badge-ann">ANN</span>公告报文</h2><span class="hw-panel-meta">累计值 · uint64</span></div>
+            <div class="hw-metric-hero"><strong id="metric-rx-ann">—</strong><span>接收数</span></div>
+            <h3 class="hw-metric-subtitle">处理结果</h3>
+            <div id="metric-results-ann" class="hw-kv-grid hw-kv-compact"><div class="empty">等待数据</div></div>
+            <h3 class="hw-metric-subtitle">累计计数器</h3>
+            <div id="metric-counters-ann" class="hw-kv-grid hw-kv-compact"><div class="empty">等待数据</div></div>
+          </section>
+          <section class="hw-panel hw-metric-panel">
+            <div class="hw-panel-header"><h2><span class="hw-type-badge badge-get">GET</span>查询报文</h2><span class="hw-panel-meta">累计值 · uint64</span></div>
+            <div class="hw-metric-hero"><strong id="metric-rx-get">—</strong><span>接收数</span></div>
+            <h3 class="hw-metric-subtitle">处理结果</h3>
+            <div id="metric-results-get" class="hw-kv-grid hw-kv-compact"><div class="empty">等待数据</div></div>
+            <h3 class="hw-metric-subtitle">累计计数器</h3>
+            <div id="metric-counters-get" class="hw-kv-grid hw-kv-compact"><div class="empty">等待数据</div></div>
+          </section>
+          <section class="hw-panel hw-metric-panel">
+            <div class="hw-panel-header"><h2><span class="hw-type-badge badge-control">CONTROL</span>控制报文</h2><span class="hw-panel-meta">累计值 · uint64</span></div>
+            <div class="hw-metric-hero"><strong id="metric-rx-control">—</strong><span>接收数</span></div>
+            <h3 class="hw-metric-subtitle">处理结果</h3>
+            <div id="metric-results-control" class="hw-kv-grid hw-kv-compact"><div class="empty">等待数据</div></div>
+            <h3 class="hw-metric-subtitle">累计计数器</h3>
+            <div id="metric-counters-control" class="hw-kv-grid hw-kv-compact"><div class="empty">等待数据</div></div>
+          </section>
+          <section class="hw-panel hw-metric-panel">
+            <div class="hw-panel-header"><h2><span class="hw-type-badge badge-arp">ARP</span>地址解析报文</h2><span class="hw-panel-meta">累计值 · uint64</span></div>
+            <div class="hw-metric-hero"><strong id="metric-rx-arp">—</strong><span>接收数</span></div>
+            <h3 class="hw-metric-subtitle">处理结果</h3>
+            <div id="metric-results-arp" class="hw-kv-grid hw-kv-compact"><div class="empty">等待数据</div></div>
+          </section>
+        </div>
+
+        <div class="hw-metric-grid hw-metric-grid-tail">
+          <section class="hw-panel hw-metric-panel">
+            <div class="hw-panel-header"><h2>接收异常明细</h2><span class="hw-panel-meta">未进入 CoLoR 处理的报文</span></div>
+            <div id="metric-rx-anomaly-detail" class="hw-kv-grid hw-kv-compact"><div class="empty">等待数据</div></div>
+          </section>
+          <section class="hw-panel hw-metric-panel">
+            <div class="hw-panel-header"><h2>日志队列</h2><span class="hw-panel-meta">累计日志丢弃与限速</span></div>
+            <div id="metric-log" class="hw-kv-grid hw-kv-compact"><div class="empty">等待数据</div></div>
+          </section>
+        </div>
+      </section>
+
+      <section class="hw-view" data-view="packet-stats">
+        <section class="hw-panel"><div class="hw-panel-header"><h2>报文接收与处理结果</h2></div>
+          <div class="hw-table-grid">
+            <div><h3>各类报文接收数</h3><div class="hw-table-wrap"><table><thead><tr><th>报文类型</th><th>接收数</th></tr></thead><tbody id="packet-rx-body"><tr><td colspan="2" class="empty">等待数据</td></tr></tbody></table></div></div>
+            <div><h3>各类报文处理结果</h3><div class="hw-table-wrap"><table><thead id="packet-results-head"></thead><tbody id="packet-results-body"><tr><td class="empty">等待数据</td></tr></tbody></table></div></div>
+          </div>
+        </section>
+      </section>
+
+      <section class="hw-view" data-view="ports">
+        <section class="hw-panel"><div class="hw-panel-header"><h2>端口状态与统计</h2><span class="hw-panel-meta">DPDK 网卡快照</span></div>
+          <div class="hw-table-wrap"><table><thead id="ports-head"></thead><tbody id="ports-body"><tr><td class="empty">等待数据</td></tr></tbody></table></div>
+        </section>
+      </section>
+
+      <section class="hw-view" data-view="log-stats">
+        <section class="hw-panel"><div class="hw-panel-header"><h2>日志队列统计</h2><span class="hw-panel-meta">累计日志接收、丢弃和限速情况</span></div>
+          <div class="hw-table-wrap"><table><thead><tr><th>字段</th><th>值</th></tr></thead><tbody id="log-stats-body"><tr><td colspan="2" class="empty">等待数据</td></tr></tbody></table></div>
+        </section>
+      </section>
+
+      <section class="hw-view" data-view="traces">
+        <section class="hw-panel"><div class="hw-panel-header"><h2>ANN / GET AS 追踪计数</h2><span class="hw-panel-meta">完整显示 0–255 AS 编号</span></div>
+          <div class="hw-table-wrap hw-trace-wrap"><table><thead><tr><th>AS 编号</th><th>ANN 计数</th><th>GET 计数</th></tr></thead><tbody id="trace-body"><tr><td colspan="3" class="empty">等待数据</td></tr></tbody></table></div>
+        </section>
+      </section>
+
+      <section class="hw-view" data-view="logs">
+        <section class="hw-panel"><div class="hw-panel-header"><h2>系统日志</h2><div class="hw-log-summary"><span class="hw-dot"></span><strong id="log-count">0</strong><span>条已加载</span></div></div>
+          <div class="hw-log-filters" aria-label="日志筛选">
+            <label>级别<select id="log-filter-level"><option value="">全部</option><option value="debug">debug</option><option value="info">info</option><option value="warn">warn</option><option value="error">error</option></select></label>
+            <label>模块<select id="log-filter-module"><option value="">全部</option><option value="app">app</option><option value="ann">ann</option><option value="get">get</option><option value="control">control</option><option value="arp">arp</option><option value="table">table</option><option value="security">security</option></select></label>
+            <label>事件编号<input id="log-filter-event" type="number" min="0" placeholder="如 3001"></label>
+            <label class="hw-log-filter-keyword">关键字<input id="log-filter-keyword" type="search" placeholder="匹配消息内容"></label>
+            <button id="log-filter-reset" type="button" class="hw-btn-reset">重置筛选</button>
+          </div>
+          <div class="hw-log-toolbar">
+            <p class="hw-log-cursor" id="log-poll-meta">等待日志数据</p>
+            <div class="hw-pagination" aria-label="日志分页">
+              <label for="log-page-size">每页</label>
+              <select id="log-page-size" aria-label="每页显示条数"><option value="25" selected>25</option><option value="50">50</option><option value="100">100</option></select>
+              <span>条</span>
+              <span id="log-range" class="hw-log-range">0 条</span>
+              <button id="log-first" type="button" aria-label="第一页" title="第一页">«</button>
+              <button id="log-prev" type="button" aria-label="上一页" title="上一页">‹</button>
+              <span id="log-page-info" class="hw-log-page-info">第 0 / 0 页</span>
+              <button id="log-next" type="button" aria-label="下一页" title="下一页">›</button>
+              <button id="log-last" type="button" aria-label="最后一页" title="最后一页">»</button>
+            </div>
+          </div>
+          <div class="hw-table-wrap"><table><thead><tr><th>序号</th><th>本地时间</th><th>级别</th><th>模块</th><th>事件编号</th><th>lcore</th><th>端口</th><th>消息</th></tr></thead><tbody id="log-body"><tr><td colspan="8" class="empty">暂无日志</td></tr></tbody></table></div>
+        </section>
+      </section>
+
+      <section class="hw-view" data-view="sid-acl">
+        <section class="hw-panel">
+          <div class="hw-panel-header"><h2>SID 列表</h2><div class="hw-log-summary"><strong id="sid-count">0</strong><span>个 SID</span></div></div>
+          <div class="hw-table-wrap hw-sid-wrap"><table><thead><tr><th>序号</th><th>SID (hex)</th></tr></thead><tbody id="sid-body"><tr><td colspan="2" class="empty">等待数据</td></tr></tbody></table></div>
+        </section>
+        <section class="hw-panel">
+          <div class="hw-panel-header"><h2>ACL 访问控制规则</h2><div class="hw-log-summary"><strong id="acl-count">0</strong><span>条规则</span></div></div>
+          <form id="acl-add-form" class="hw-acl-form">
+            <label>ID<input id="acl-new-id" type="number" min="1" max="4294967295" required placeholder="唯一 ID"></label>
+            <label>动作<select id="acl-new-action"><option value="allow">allow</option><option value="deny">deny</option></select></label>
+            <label class="hw-acl-field-sid">SID (hex)<input id="acl-new-sid" required placeholder="偶数位 hex，最多 72 位，右侧自动补零"></label>
+            <label>ASID<input id="acl-new-asid" type="number" min="0" max="255" required placeholder="0-255"></label>
+            <label>NID (hex)<input id="acl-new-nid" placeholder="留空表示匹配任意 NID"></label>
+            <button type="submit" class="hw-btn-primary">添加规则</button>
+          </form>
+          <p id="acl-op-message" class="hw-acl-message" hidden></p>
+          <div class="hw-table-wrap"><table><thead><tr><th>ID</th><th>动作</th><th>SID (hex)</th><th>ASID</th><th>NID (hex)</th><th>命中 (allow / deny)</th><th>操作</th></tr></thead><tbody id="acl-body"><tr><td colspan="7" class="empty">等待数据</td></tr></tbody></table></div>
+        </section>
+      </section>
+
+      <footer class="hw-footer">RM Resource Manager <span>运行监控与 ACL 管理</span></footer>
+    </div>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>

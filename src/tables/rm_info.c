@@ -8,6 +8,7 @@ void
 node_rel(void *p)
 {
     rte_free(p);
+    return;
 }
 
 void
@@ -140,6 +141,7 @@ global_set_as_info(uint8_t *nid, int aid, int sl, uint32_t sk)
     if(my_as_info->as_graph != NULL)
         graph_clear(my_as_info->as_graph);
     my_as_info->as_graph = graph_create(aid);
+    return 0;
 }
 
 int

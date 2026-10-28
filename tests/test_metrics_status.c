@@ -47,7 +47,7 @@ assert_get_result_is_counted_once(void)
     rm_metrics_record_result(RM_PACKET_GET, RM_PACKET_RESULT_ACL_DENIED);
     rm_metrics_record_result(RM_PACKET_GET, RM_PACKET_RESULT_SID_LIST_RETURNED);
     rm_metrics_record_trace(RM_PACKET_GET, 7);
-    rm_metrics_record_trace(RM_PACKET_GET, RM_TRACE_AS_COUNT);
+    rm_metrics_record_trace(RM_PACKET_GET, (uint8_t)RM_TRACE_AS_COUNT);
 
     assert(rm_metrics_read_snapshot(&snapshot) == 0);
     assert(snapshot.packet_rx[RM_PACKET_GET] == 1);

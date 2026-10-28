@@ -81,7 +81,7 @@ int parse_basic_config(char *buf)
     uint32_t sk;
     uint8_t nid[128];
     char mid_buf[128], nid_str[128];
-    char *v, *pt = next_mark(buf);
+    char *pt = next_mark(buf);
 
     if(!pt || *pt == '$')
     {
@@ -117,9 +117,9 @@ int parse_as_br_px_config(char *buf)
     if(buf == NULL)
         return RM_PARSE_ERR_FORMAT;
     
-    int i, br_n, aid, secu, px_count, br_buf_count, port;
+    int i, br_n, aid, secu, br_buf_count, port;
     char *pt = buf;
-    uint8_t nid[128], ip_addr[32], px[16];
+    uint8_t nid[128], ip_addr[32];
     uint16_t px_mid;
     br_info_t br_mid;
     parse_br_buf_t br_buf[64];
@@ -138,8 +138,8 @@ int parse_as_br_px_config(char *buf)
         if(sscanf(pt++, "#%d %s %s %d", &br_n, nid, ip_addr, &port) != 4)
             return RM_PARSE_ERR_FORMAT;
         // construct BR and insert
-        str_to_hex(nid, br_mid.nid, 16);
-        br_mid.ip_addr = str_to_ipaddr(ip_addr);
+        str_to_hex((char *)nid, br_mid.nid, 16);
+        br_mid.ip_addr = str_to_ipaddr((char *)ip_addr);
         br_mid.port = port; // TODO: port decision
         br_store_insert(&br_mid); // check
         br_buf[br_buf_count].br_n = br_n;
@@ -180,7 +180,7 @@ int parse_as_br_px_config(char *buf)
                 if(!pt || *pt != '^')
                     break;
 
-                if(sscanf(pt++, "^%x", &px_mid) != 1)
+                if(sscanf(pt++, "^%hx", &px_mid) != 1)
                     return RM_PARSE_ERR_FORMAT;
                 connect_info_insert(con_mid, px_mid);
             }
@@ -276,14 +276,14 @@ read_ip_config(char *filename)
     
     cli_print("Read %dB of config\n", offset);
     
-    pt = next_group_mark(read_buf);
+    pt = (uint8_t *)next_group_mark((char *)read_buf);
     if(pt == NULL)
     {
         rte_free(read_buf);
         return -3;
     }
-    cli_print("port - IP configuration: %s\n", parse_ip_config(pt));
-    
+    cli_print("port - IP configuration: %s\n", parse_ip_config((char *)pt));
+
     rte_free(read_buf);
     fclose(fp);
     return 0;
@@ -321,41 +321,41 @@ read_config_file(char *filename)
     
     cli_print("Read %dB of config\n", offset);
 
-    pt = next_group_mark(read_buf);
+    pt = (uint8_t *)next_group_mark((char *)read_buf);
     if(pt == NULL)
     {
         rte_free(read_buf);
         return -3;
     }
     else
-        cli_print("port - IP configuration: %s\n", parse_ip_config(pt));
+        cli_print("port - IP configuration: %s\n", parse_ip_config((char *)pt));
 
-    pt = next_group_mark(pt + 1);
+    pt = (uint8_t *)next_group_mark((char *)pt + 1);
     if(pt == NULL)
     {
         rte_free(read_buf);
         return -3;
     }
     else
-        cli_print("BASIC_PARSE_RES : %d\n", parse_basic_config(pt));
+        cli_print("BASIC_PARSE_RES : %d\n", parse_basic_config((char *)pt));
 
-    pt = next_group_mark(pt + 1);
+    pt = (uint8_t *)next_group_mark((char *)pt + 1);
     if(pt == NULL)
     {
         rte_free(read_buf);
         return -3;
     }
     else
-        cli_print("ABP_PARSE_RES : %d\n", parse_as_br_px_config(pt));
+        cli_print("ABP_PARSE_RES : %d\n", parse_as_br_px_config((char *)pt));
 
-    pt = next_group_mark(pt + 1);
+    pt = (uint8_t *)next_group_mark((char *)pt + 1);
     if(pt == NULL)
     {
         rte_free(read_buf);
         return -3;
     }
     else
-        cli_print("PROXY_PARSE_RES : %d\n", parse_multi_proxy_config(pt));
+        cli_print("PROXY_PARSE_RES : %d\n", parse_multi_proxy_config((char *)pt));
 
     rte_free(read_buf);
     fclose(fp);

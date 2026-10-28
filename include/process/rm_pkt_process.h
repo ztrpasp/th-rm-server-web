@@ -44,7 +44,7 @@ sid_info_t *rm_GET_search(void *pkt);
 int rm_GET_process(void *pkt, sid_info_t **node_pt, struct rte_ipv4_hdr *ip_layer_pt, struct lcore_conf *qconf);
 
 // CONTROL process
-int rm_CONTROL_process(pkt_data, dst_port);
+int rm_CONTROL_process(void *pkt, int from_port);
 
 // TEST
 void show_mark_t_array(mark_t *ans);

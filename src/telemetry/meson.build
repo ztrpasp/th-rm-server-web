@@ -3,6 +3,8 @@ telemetry_inc = include_directories('../../include')
 telemetry_sources = files(
     'rm_metrics.c',
     'rm_log.c',
+    'rm_monitor.c',
+    'rm_web.c',
 )
 
 lib_telemetry = static_library('telemetry', telemetry_sources,

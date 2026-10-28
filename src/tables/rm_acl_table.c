@@ -1,5 +1,6 @@
 #include "tables/rm_acl_table.h"
 
+#include <inttypes.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -107,6 +108,8 @@ int rm_acl_rule_add(const rm_acl_rule_t *rule)
         return -1;
     }
     *slot = *rule;
+    atomic_store_explicit(&slot->allow_hits, 0, memory_order_relaxed);
+    atomic_store_explicit(&slot->deny_hits, 0, memory_order_relaxed);
     return 0;
 }
 
@@ -159,7 +162,9 @@ void rm_acl_rule_show_all(void)
         if (nid_wildcard) {
             cli_print(" (通配符: 匹配任意nid)");
         }
-        cli_print("\n");
+        cli_print(" hit(allow)=%" PRIu64 " hit(deny)=%" PRIu64 "\n",
+            (uint64_t)atomic_load_explicit(&rule->allow_hits, memory_order_relaxed),
+            (uint64_t)atomic_load_explicit(&rule->deny_hits, memory_order_relaxed));
     }
 }
 
@@ -178,7 +183,12 @@ int rm_acl_check_get(const uint8_t *sid, uint32_t asid, const uint8_t *nid, uint
             if (matched_id) {
                 *matched_id = rule->id;
             }
-            return rule->action == RM_ACL_ALLOW ? 1 : 0;
+            if (rule->action == RM_ACL_ALLOW) {
+                atomic_fetch_add_explicit(&rule->allow_hits, 1, memory_order_relaxed);
+                return 1;
+            }
+            atomic_fetch_add_explicit(&rule->deny_hits, 1, memory_order_relaxed);
+            return 0;
         }
     }
     return 1;

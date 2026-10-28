@@ -21,3 +21,14 @@ log_test = executable(
 )
 
 test('log', log_test, suite: 'unit')
+
+monitor_test = executable(
+  'monitor-test',
+  files('test_monitor.c'),
+  include_directories: tests_inc,
+  dependencies: [dpdk_dep, threads_dep],
+  link_with: [lib_telemetry],
+  install: false,
+)
+
+test('monitor', monitor_test, suite: 'unit')

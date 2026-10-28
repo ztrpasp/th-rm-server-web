@@ -124,14 +124,14 @@ rm_ANN_parse_store(void *pkt, mark_t *mark_array, search_px_result_t *src_px_res
     
     void *pt, *N_sid, *L_sid, *nid, *value_pt;
     sid_info_t *sid_mid;
-    br_info_t *br_mid;
+//    br_info_t *br_mid;
     proxy_info_t *proxy_mid;
     strategy_t *st;
-    uint16_t last_px;
+    uint16_t last_px = 0;
     ANN_front_t *ann_front = (ANN_front_t *)pkt;
     ANN_unit_front_t *unit_front;
-    uint8_t i, j, strategy_count, mark_n,
-            unit_count = GET_ANN_UNIT_NUM(ann_front->unit_px_num);
+    uint8_t i, j, strategy_count;
+    uint8_t unit_count = GET_ANN_UNIT_NUM(ann_front->unit_px_num);
 
     // check unit_count limit
     if(unit_count > 32)
@@ -515,6 +515,16 @@ rm_GET_search(void *pkt)
         return NULL;
 }
 
+static void *
+rm_GET_pid_start(void *pkt)
+{
+    GET_front_t *get_pt = (GET_front_t *)pkt;
+    uint8_t *pid_start = (uint8_t *)pkt + get_pt->pkg_len - get_pt->PID_num * 4;
+    if (CHECK_GET_FLAG_R(get_pt->flag))
+        pid_start -= 4;
+    return pid_start;
+}
+
 static int
 rm_GET_get_source_asid(void *pkt, uint32_t *source_asid)
 {
@@ -531,7 +541,7 @@ rm_GET_get_source_asid(void *pkt, uint32_t *source_asid)
         return RM_PROCESS_SUCCESS;
     }
 
-    trace_count = graph_trace(my_as_info->as_graph, pkt + sizeof(GET_front_t), get_pt->PID_num, as_trace);
+    trace_count = graph_trace(my_as_info->as_graph, rm_GET_pid_start(pkt), get_pt->PID_num, as_trace);
     if(trace_count <= 0)
         return RM_PROCESS_ERR;
 
@@ -561,7 +571,7 @@ rm_GET_check_filter(void *pkt, sid_info_t *search_res)
 
         if(global_quick_check_strategy(STRATEGY_TRACE_EVERY_PKG))
         {
-            p_check = graph_trace(my_as_info->as_graph, pkt + sizeof(GET_front_t), get_pt->PID_num, as_trace);
+            p_check = graph_trace(my_as_info->as_graph, rm_GET_pid_start(pkt), get_pt->PID_num, as_trace);
             if(p_check == 0)
             {
                 return 1;
@@ -603,7 +613,7 @@ rm_GET_check_filter(void *pkt, sid_info_t *search_res)
                         break;
                     // get the list of AS being passed
                     if(p_check == 0)
-                        p_check = graph_trace(my_as_info->as_graph, pkt + sizeof(GET_front_t), get_pt->PID_num, as_trace);
+                        p_check = graph_trace(my_as_info->as_graph, rm_GET_pid_start(pkt), get_pt->PID_num, as_trace);
                     if(p_check == 0)
                     {
                         return 1;
@@ -839,7 +849,7 @@ rm_CONTROL_process(void *pkt, int from_port)
         return RM_ERR_CHECKSUM_UNPASSED;
     }
 
-    int as_num, br_num, px_num, i, j, k, br_buf_count, br_n;
+    int as_num, br_num, px_num, i, j, br_buf_count;
     as_info_t *as_mid;
     connect_info_t *con_mid;
     CONTROL_front_t *con_pt = (CONTROL_front_t *)pkt;
@@ -855,7 +865,7 @@ rm_CONTROL_process(void *pkt, int from_port)
             clear_syn_rm_config();
             
             // base as-info
-            uint8_t *nid = pt;
+//            uint8_t *nid = pt;
             uint32_t asid = *(uint32_t *)(pt + 16);
             uint8_t security_level = *(uint8_t *)(pt + 20);
             uint32_t sk = *(uint32_t *)(pt + 21);
@@ -888,7 +898,7 @@ rm_CONTROL_process(void *pkt, int from_port)
             for (i = 0; i < px_num; i++) {
                 uint32_t asid = *(uint32_t *)pt;
                 uint8_t br_n = *(uint8_t *)(pt + 4);
-                uint8_t prefix_length = *(uint8_t *)(pt + 5); // TODO: currently PX is 16-bit 
+//                uint8_t prefix_length = *(uint8_t *)(pt + 5); // TODO: currently PX is 16-bit 
                 uint32_t px = *(uint32_t *)(pt + 6);
                 as_mid = as_store_search_aid(asid);
                 for (j = 0; j < br_buf_count; j++) { // find br

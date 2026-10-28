@@ -366,14 +366,14 @@ static void history_add(const char *cmd)
     if (idx >= HISTORY_MAX) {
         /* 历史满了，往前挪一条 */
         for (int i = 1; i < HISTORY_MAX; i++) {
-            strncpy(cmd_history.entries[i - 1], cmd_history.entries[i], RM_MAX_LINE_LEN - 1);
+            snprintf(cmd_history.entries[i - 1], RM_MAX_LINE_LEN, "%s",
+                cmd_history.entries[i]);
         }
         idx = HISTORY_MAX - 1;
     } else {
         cmd_history.count++;
     }
-    strncpy(cmd_history.entries[idx], cmd, RM_MAX_LINE_LEN - 1);
-    cmd_history.entries[idx][RM_MAX_LINE_LEN - 1] = '\0';
+    snprintf(cmd_history.entries[idx], RM_MAX_LINE_LEN, "%s", cmd);
 }
 
 static const char *history_prev(const char *current_line)
@@ -382,8 +382,8 @@ static const char *history_prev(const char *current_line)
         return NULL;
     }
     if (!cmd_history.browsing) {
-        strncpy(cmd_history.saved, current_line ? current_line : "", RM_MAX_LINE_LEN - 1);
-        cmd_history.saved[RM_MAX_LINE_LEN - 1] = '\0';
+        snprintf(cmd_history.saved, RM_MAX_LINE_LEN, "%s",
+            current_line ? current_line : "");
         cmd_history.current = cmd_history.count;
         cmd_history.browsing = true;
     }

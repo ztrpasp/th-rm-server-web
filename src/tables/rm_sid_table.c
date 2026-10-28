@@ -108,6 +108,7 @@ int
 sid_store_insert(uint8_t *N_sid, uint8_t *L_sid, sid_info_t *info_node,
                     int cmp(sid_info_t *x, sid_info_t *y))
 {
+    (void)cmp;
     if(!info_node){
         RM_LOG_ERROR(RM_LOG_MODULE_TABLE, RM_EVENT_PACKET_MALFORMED,
             RM_LOG_PORT_NONE, "SID insert rejected: info node is null");

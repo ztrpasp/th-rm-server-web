@@ -4,7 +4,7 @@
 #include <string.h>
 #include <time.h>
 
-#include <rte_cache.h>
+#include <rte_common.h>
 #include <rte_lcore.h>
 
 typedef struct rm_lcore_metrics {
@@ -107,7 +107,7 @@ rm_metrics_record_result(rm_packet_type_t type, rm_packet_result_t result)
 }
 
 void
-rm_metrics_record_trace(rm_packet_type_t type, uint8_t aid)
+rm_metrics_record_trace(rm_packet_type_t type, uint16_t aid)
 {
     rm_lcore_metrics_t *slot = &metrics_by_lcore[metrics_slot()];
 
@@ -156,6 +156,33 @@ rm_metrics_read_snapshot(rm_metrics_snapshot_t *out)
     out->generation = atomic_fetch_add_explicit(
         &snapshot_generation, 1, memory_order_relaxed) + 1;
     return 0;
+}
+
+const char *
+rm_metric_name(rm_metric_id_t metric)
+{
+    static const char *const names[RM_METRIC_COUNT] = {
+        "rx_packets",
+        "rx_non_ipv4",
+        "rx_non_color",
+        "rx_unsupported",
+        "tx_packets",
+        "tx_dropped",
+        "ann_from_inside",
+        "ann_from_outside",
+        "ann_outbound",
+        "ann_filtered",
+        "get_from_inside",
+        "get_from_outside",
+        "get_to_inside",
+        "get_to_outside",
+        "get_filtered",
+        "proxy_registered",
+        "log_dropped",
+        "log_suppressed"
+    };
+
+    return (unsigned)metric < RM_METRIC_COUNT ? names[metric] : "unknown";
 }
 
 const char *

@@ -18,11 +18,7 @@ extern struct rte_mempool *broadcast_tx_pool;
 static __rte_always_inline void
 rm_process_single_packet(struct rte_mbuf *m, uint8_t portid, struct lcore_conf *qconf)
 {
-    int i, dst_port = 3, check, num_path, c_len;
-    uint32_t src_ip, dst_ip;
-    uint8_t *dst_mac;
-    struct rte_ether_addr port_mac_addr;
-    struct rte_mbuf *pkt;
+    int check;
 	rm_metrics_add(RM_METRIC_RX_PACKETS, 1);
     struct rte_ether_hdr *eth_layer_pt = (struct rte_ether_hdr *)rte_pktmbuf_mtod_offset(m, struct rte_ether_hdr *, 0);
 

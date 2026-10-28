@@ -26,3 +26,5 @@ subdir('src/vendor')
 subdir('src/commandline')
 subdir('tests')
 subdir('src/app')
+
+install_subdir('web', install_dir: join_paths(get_option('datadir'), 'rm', 'web'))

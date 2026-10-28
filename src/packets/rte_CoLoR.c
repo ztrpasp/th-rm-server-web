@@ -39,7 +39,7 @@ check_cksum(uint16_t *buf, int count)
 		sum += *(uint8_t *)buf;
 	sum = (sum >> 16) + (sum & 0xffff);
 	sum += (sum>>16);
-	return (sum == 0xffff) ? 1 : 0;
+	return (uint8_t)((sum == 0xffff) ? 1 : 0);
 }
 
 // initialize the front part of the ANN pkt
@@ -47,7 +47,7 @@ void
 ANN_init(uint8_t *buf)
 {
     if(!buf)
-		return;
+		return; // Corrected: void function should not return value
 
     ANN_front_t *ann_pt = (ANN_front_t *)buf;
     ann_pt->version_package = 0x71;
@@ -172,7 +172,7 @@ void
 GET_init(uint8_t *buf, uint8_t *n_sid, uint8_t *l_sid, uint8_t *nid)
 {
     if(!buf || !n_sid || !l_sid || !nid)
-        return;
+        return; // Corrected: void function should not return value
 
     GET_front_t *get_pt = (GET_front_t *)buf;
     get_pt->version_package = 0x72;
@@ -218,7 +218,7 @@ void GET_append_rn(uint8_t *buf, uint32_t rn)
 uint32_t GET_pids(uint8_t *buf, uint8_t *pids)
 {
 	if(!buf)
-		return;
+		return 0; // Corrected: non-void function returning 0 on error
 
 	GET_front_t *get_pt = (GET_front_t *)buf;
 	uint8_t *pids_begin = buf + get_pt->pkg_len - get_pt->PID_num * 4;
@@ -284,7 +284,7 @@ void
 DATA_init(uint8_t *buf, uint8_t *n_sid, uint8_t *l_sid, uint8_t *nid)
 {
     if(!buf || !n_sid || !l_sid || !nid)
-        return;
+        return; // Corrected: void function should not return value
 
     DATA_front_t *data_pt = (DATA_front_t *)buf;
     data_pt->version_package = 0x73;
@@ -698,7 +698,7 @@ md5(const uint8_t *initial_msg, size_t initial_len, uint8_t *digest)
 
     //Pre-processing:
     //append "1" bit to message
-    //append "0" bits until message length in bits ≡ 448 (mod 512)
+    //append "0" bits until message length in bits = 448 (mod 512)
     //append length mod (2^64) to message
 
     for (new_len = initial_len + 1; new_len % (512/8) != 448/8; new_len++)
@@ -720,7 +720,7 @@ md5(const uint8_t *initial_msg, size_t initial_len, uint8_t *digest)
     for(offset=0; offset<new_len; offset += (512/8))
 	{
 
-        // break chunk into sixteen 32-bit words w[j], 0 ≤ j ≤ 15
+        // break chunk into sixteen 32-bit words w[j], 0 = j = 15
         for (i = 0; i < 16; i++)
             w[i] = to_int32(msg + offset + i*4);
 

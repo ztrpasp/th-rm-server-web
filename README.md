@@ -69,6 +69,40 @@ RM_LOG_ROTATE_FILES=5         # 历史文件数量，默认 5
 计数器为准。`display status` 中还包含总 RX/TX、非 IPv4、非 CoLoR、未支持类型和
 TX 丢弃等运行指标。
 
+### Web 可视化监控
+
+RM 默认启动 Web 监控服务，监听 `127.0.0.1:8080`，浏览器打开该地址即可查看
+RX/TX 趋势、关键计数器和运行日志，并管理 SID 列表与 ACL 访问控制规则
+（ACL 支持在线添加/删除）。生产环境建议通过反向代理或安全隧道对外提供访问，
+注意 ACL 写接口会直接修改运行时规则。
+
+启动前可通过以下环境变量调整：
+
+```bash
+RM_WEB_ENABLED=1             # 是否启用，设置为 0/off 可关闭
+RM_WEB_BIND=127.0.0.1        # IPv4 监听地址
+RM_WEB_PORT=8080             # 监听端口，设置为 0 可使用临时端口
+RM_WEB_ROOT=./web            # Dashboard 静态资源目录
+```
+
+提供以下接口：
+
+```text
+GET /api/v1/health                 服务健康状态
+GET /api/v1/metrics                JSON 运行指标、端口状态和日志统计
+GET /api/v1/logs?after=0&limit=100 JSON 增量日志，limit 最大 256
+GET /api/v1/sids                   JSON 系统全部 SID 列表
+GET /api/v1/acls                   JSON 当前 ACL 规则列表
+POST /api/v1/acls                  添加 ACL 规则，JSON 体 {id, action, sid, asid, nid}
+DELETE /api/v1/acls?id=N           删除指定 ID 的 ACL 规则
+GET /metrics                       Prometheus 文本格式指标
+```
+
+安装时 Dashboard 会放到 `${prefix}/share/rm/web`；从安装目录运行时设置
+`RM_WEB_ROOT=${prefix}/share/rm/web`，如果从源码构建目录直接运行，保持 `RM_WEB_ROOT=./web`
+即可。服务启动后可运行 `bash tests/web_smoke.sh` 做接口冒烟检查，
+也可以通过 `RM_SMOKE_URL=http://127.0.0.1:8080 bash tests/web_smoke.sh` 指定地址。
+
 ### 注意
 
 如果发现脚本不能运行，可能是权限问题
