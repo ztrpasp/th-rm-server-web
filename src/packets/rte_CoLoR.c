@@ -81,6 +81,89 @@ ANN_check_checksum(uint8_t *buf)
 	return check_cksum((uint16_t *)buf, ann_pt->pkg_len);
 }
 
+/*
+ * 检查 ANN 的长度字段和每个通告单元的边界，只读、没有副作用。
+ * avail 是 CoLoR 头起实际收到的字节数。返回 ANN_FORMAT_OK 后，
+ * 按 flag 和 strategy_num 逐个解析单元、读到 pkg_len 处的 PX 都不会越界。
+ * 单元长度以按 flag、策略单元实算的为准，不看 unit_len（别家终端不一定填对），
+ * 不一致的个数记在 info->len_mismatch。info 可以为 NULL。
+ */
+int
+ANN_check_format(const uint8_t *buf, uint32_t avail, ANN_format_info_t *info)
+{
+	if(info)
+		memset(info, 0, sizeof(*info));
+	if(!buf || avail < sizeof(ANN_front_t))
+		return ANN_FORMAT_ERR_SHORT;
+
+	const ANN_front_t *ann_pt = (const ANN_front_t *)buf;
+	uint32_t pkg_len = ann_pt->pkg_len;
+	uint32_t px_bytes = GET_ANN_PX_NUM(ann_pt->unit_px_num) * 2u;
+	int unit_num = GET_ANN_UNIT_NUM(ann_pt->unit_px_num);
+
+	if(pkg_len > avail)
+		return ANN_FORMAT_ERR_PKG_LEN;
+	if(pkg_len < sizeof(ANN_front_t) + px_bytes)
+		return ANN_FORMAT_ERR_SHORT;
+
+	// 单元区：ANN 头之后、PX 之前
+	const uint8_t *pt = buf + sizeof(ANN_front_t);
+	const uint8_t *end = buf + pkg_len - px_bytes;
+
+	for(int i = 0; i < unit_num; i++)
+	{
+		const uint8_t *unit = pt;
+		if((size_t)(end - pt) < sizeof(ANN_unit_front_t))
+			return ANN_FORMAT_ERR_UNIT;
+
+		const ANN_unit_front_t *unit_pt = (const ANN_unit_front_t *)unit;
+		size_t fixed = sizeof(ANN_unit_front_t);
+		if(CHECK_ANN_UNIT_FLAG_N(unit_pt->flag))
+			fixed += COLOR_N_SID_LEN;
+		if(CHECK_ANN_UNIT_FLAG_L(unit_pt->flag))
+			fixed += COLOR_L_SID_LEN;
+		if(CHECK_ANN_UNIT_FLAG_I(unit_pt->flag))
+			fixed += COLOR_NID_LEN;
+		if((size_t)(end - pt) < fixed)
+			return ANN_FORMAT_ERR_UNIT;
+		pt += fixed;
+
+		if(unit_pt->strategy_num > ANN_MAX_STRATEGY_NUM)
+			return ANN_FORMAT_ERR_STRATEGY;
+		for(int j = 0; j < unit_pt->strategy_num; j++)
+		{
+			// 先确认 tag、len 两个字节可读，再看 value
+			if((size_t)(end - pt) < sizeof(ANN_strategy_front_t))
+				return ANN_FORMAT_ERR_STRATEGY;
+			size_t s_len = pt[1];
+			if((size_t)(end - pt) < sizeof(ANN_strategy_front_t) + s_len)
+				return ANN_FORMAT_ERR_STRATEGY;
+			pt += sizeof(ANN_strategy_front_t) + s_len;
+		}
+
+		if(info && (size_t)(pt - unit) != unit_pt->unit_len)
+			info->len_mismatch++;
+	}
+
+	if(info)
+		info->trailing = (uint16_t)(end - pt);
+	return ANN_FORMAT_OK;
+}
+
+const char *
+ANN_format_error_str(int code)
+{
+	switch(code)
+	{
+		case ANN_FORMAT_OK: return "ok";
+		case ANN_FORMAT_ERR_SHORT: return "packet shorter than ANN header and PX list";
+		case ANN_FORMAT_ERR_PKG_LEN: return "pkg_len exceeds received length";
+		case ANN_FORMAT_ERR_UNIT: return "announce unit overruns packet";
+		case ANN_FORMAT_ERR_STRATEGY: return "strategy unit overruns packet or too many";
+		default: return "unknown";
+	}
+}
+
 // append a unit to ANN
 void
 ANN_append_unit(uint8_t *buf, uint8_t *unit)
@@ -135,15 +218,21 @@ ANN_unit_construct(uint8_t *buf, uint8_t *n_sid, uint8_t *l_sid, uint8_t *nid)
 	unit_pt->unit_len = offset;
 }
 
-// append strategy unit to unit buf
-void
+/*
+ * 把一个策略单元追加到单元缓冲 buf（至少 ANN_UNIT_MAX_LEN 字节）的末尾。
+ * 返回 1：已追加；0：追加后单元会超过 255 字节，没有追加；-1：参数无效（含 l == 0）。
+ */
+int
 ANN_unit_append_strategy(uint8_t *buf, uint8_t t, uint8_t l, uint8_t *v)
 {
-	if(!buf || l <= 0 || !v)
-		return;
+	if(!buf || l == 0 || !v)
+		return -1;
 
 	ANN_unit_front_t *unit_pt = (ANN_unit_front_t *) buf;
 	uint8_t offset = unit_pt->unit_len;
+
+	if((unsigned)offset + 2u + l > ANN_UNIT_MAX_LEN)
+		return 0;
 
 
 	*((uint8_t *)(buf + offset)) = t; // t
@@ -153,6 +242,7 @@ ANN_unit_append_strategy(uint8_t *buf, uint8_t t, uint8_t l, uint8_t *v)
 
 	unit_pt->unit_len += 2 + l;
 	unit_pt->strategy_num += 1;
+	return 1;
 }
 
 // append PX to the tail of ANN

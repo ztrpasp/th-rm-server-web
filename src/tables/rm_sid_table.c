@@ -82,28 +82,34 @@ check_same_sid_node(sid_info_t *a, sid_info_t *b)
         return false;
 }
 
+// 两个节点的策略个数、顺序和每个策略的 tag/len/value 都相同才算相同
 bool
 check_same_strategy(sid_info_t *a, sid_info_t *b)
 {
-    if(a == NULL || b == NULL)
+    if(a == NULL || b == NULL || a->strategy_array == NULL || b->strategy_array == NULL)
         return false;
-    void *sa = a->strategy_array->data, *sb = b->strategy_array->data;
-    int es = a->strategy_array->element_size, c = a->strategy_array->count, i;
-    int j;
+    rte_array_t *xa = a->strategy_array, *xb = b->strategy_array;
+    if(xa->count != xb->count)
+        return false;
     strategy_t *x1, *x2;
-    for(i = 0; i < c; i++)
+    for(int i = 0; i < xa->count; i++)
     {
-        x1 = (strategy_t *)(sa + i * es);
-        x2 = (strategy_t *)(sb + i * es);
+        x1 = (strategy_t *)((uint8_t *)xa->data + i * xa->element_size);
+        x2 = (strategy_t *)((uint8_t *)xb->data + i * xb->element_size);
         if(x1->tag != x2->tag || x1->len != x2->len)
             return false;
-        for(j = 0; j < x1->len; j++)
-            if((x1->value)[j] != (x2->value)[j])
-                return false;
+        if(x1->len > 0 && memcmp(x1->value, x2->value, x1->len) != 0)
+            return false;
     }
     return true;
 }
 
+/*
+ * 返回 1：已插入或已替换策略，需要转发；0：已插入，不转发；
+ * -2：同一来源、策略相同，什么都没做；-1：失败。
+ * 返回值 >= 0 时 info_node 归表所有（挂进链表，或策略数组被取走后释放），调用方不能再用；
+ * 返回负数时 info_node 仍归调用方，由调用方释放。
+ */
 int
 sid_store_insert(uint8_t *N_sid, uint8_t *L_sid, sid_info_t *info_node,
                     int cmp(sid_info_t *x, sid_info_t *y))
@@ -217,9 +223,13 @@ sid_store_insert(uint8_t *N_sid, uint8_t *L_sid, sid_info_t *info_node,
                if(check_same_strategy(info_node, npt)){
                    return -2;
                }
+               // 换上新的策略数组：旧数组连同每个 value 一起释放；
+               // info_node 只用来带新策略，不进链表，取走数组后释放
+               rte_array_loop_function(npt->strategy_array, sid_free_single_strategy);
                rte_array_destroy(npt->strategy_array);
                npt->strategy_array = info_node->strategy_array;
-               fwd_flag = 1; 
+               rte_free(info_node);
+               fwd_flag = 1;
                break;
            }
            // to the tail

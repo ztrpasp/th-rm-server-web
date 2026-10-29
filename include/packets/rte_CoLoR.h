@@ -65,6 +65,24 @@ struct ANN_strategy_front
 } __attribute__((__packed__));
 typedef struct ANN_strategy_front ANN_strategy_front_t;
 
+// unit_len 只有 1 字节，单元（含全部策略单元）最长 255 字节
+#define ANN_UNIT_MAX_LEN 255
+// 每个单元最多解析的策略单元个数（mark_t.strategy_pt 的容量）
+#define ANN_MAX_STRATEGY_NUM 32
+
+// ANN_check_format 的返回值
+#define ANN_FORMAT_OK 0
+#define ANN_FORMAT_ERR_SHORT -1    // 不够 ANN 头，或 pkg_len 放不下 ANN 头和 PX
+#define ANN_FORMAT_ERR_PKG_LEN -2  // pkg_len 超过实际收到的字节数
+#define ANN_FORMAT_ERR_UNIT -3     // 通告单元的头或 N/L/NID 越界
+#define ANN_FORMAT_ERR_STRATEGY -4 // 策略单元越界，或个数超过 ANN_MAX_STRATEGY_NUM
+
+typedef struct ANN_format_info
+{
+    uint8_t len_mismatch; // unit_len 与按 flag、策略单元实算的长度不一致的单元个数
+    uint16_t trailing;    // 最后一个单元之后、PX 之前没被解析到的字节数
+} ANN_format_info_t;
+
 /* ------------------------------Package format of GET---------------------------------- */
 // GET = front + (publickey) + (QoS) + (Seg_ID) + PID[PID_num] + (PID_RES)
 // flag = F/K/Q/S/A
@@ -197,10 +215,12 @@ uint32_t to_int32(const uint8_t *bytes);
 
 void ANN_init(uint8_t *buf);
 int ANN_update_checksum(uint8_t *buf);
-int ANN_check_checksum(uint8_t *buf); 
+int ANN_check_checksum(uint8_t *buf);
+int ANN_check_format(const uint8_t *buf, uint32_t avail, ANN_format_info_t *info);
+const char *ANN_format_error_str(int code);
 void ANN_append_unit(uint8_t *buf, uint8_t *unit);
 void ANN_unit_construct(uint8_t *ubuf, uint8_t *n_sid, uint8_t *l_sid, uint8_t *nid);
-void ANN_unit_append_strategy(uint8_t *ubuf, uint8_t t, uint8_t l, uint8_t *v);
+int ANN_unit_append_strategy(uint8_t *ubuf, uint8_t t, uint8_t l, uint8_t *v);
 void ANN_append_px(uint8_t *buf, uint16_t px);
 int ANN_get_pkg_length(uint8_t *buf);
 

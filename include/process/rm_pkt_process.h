@@ -12,7 +12,7 @@ typedef struct mark
     void *N_pt;
     void *L_pt;
     void *nid_pt;
-    strategy_t strategy_pt[32]; // .tag = 0 and .len = 0 to end
+    strategy_t strategy_pt[ANN_MAX_STRATEGY_NUM]; // 只有前 strategy_num 个有效，其余未初始化
 } mark_t;
 
 typedef struct px_unit
@@ -32,10 +32,11 @@ typedef struct px_unit
 #define RM_GET_ACL_DENIED -7
 #define RM_GET_POLICY_DENIED -8
 #define RM_ERR_NO_MEMORY -9
+#define RM_ERR_MALFORMED -10
 
 
 // ANN process
-int rm_ANN_parse_store(void *pkt, mark_t *mark_array, search_px_result_t *src_px_res);
+int rm_ANN_parse_store(void *pkt, uint32_t avail_len, mark_t *mark_array, search_px_result_t *src_px_res);
 int rm_ANN_forward_px_units(void *pkt, mark_t *mark_array, search_px_result_t *src_px_res, px_unit_t *px_unit_array);
 int rm_ANN_construct_ann(void *pkt, mark_t *mark_array, px_unit_t *px_units, void *ann_buf[32]);
 

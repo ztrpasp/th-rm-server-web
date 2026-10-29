@@ -12,7 +12,7 @@ ann_metric_result(int result)
         return RM_PACKET_RESULT_BAD_CHECKSUM;
     if (result == RM_ERR_NO_MEMORY)
         return RM_PACKET_RESULT_NO_MEMORY;
-    if (result == RM_ERR_NULL_PT_INPUT)
+    if (result == RM_ERR_NULL_PT_INPUT || result == RM_ERR_MALFORMED)
         return RM_PACKET_RESULT_MALFORMED;
     return result == RM_PROCESS_SUCCESS ? RM_PACKET_RESULT_OK :
         RM_PACKET_RESULT_INTERNAL_ERROR;
@@ -23,7 +23,11 @@ process_ann_packet(struct rte_mbuf *m, uint8_t portid, struct lcore_conf *qconf)
 {
     rm_metrics_record_rx(RM_PACKET_ANN);
 
-    uint8_t *pkt_data = rte_pktmbuf_mtod_offset(m, uint8_t *, sizeof(struct rte_ether_hdr) + sizeof(struct rte_ipv4_hdr));
+    const uint32_t hdr_len = sizeof(struct rte_ether_hdr) + sizeof(struct rte_ipv4_hdr);
+    uint8_t *pkt_data = rte_pktmbuf_mtod_offset(m, uint8_t *, hdr_len);
+    // CoLoR 头起实际收到的字节数（只看第一个段，pkt_data 也只指向第一个段）
+    uint32_t avail_len = rte_pktmbuf_data_len(m) > hdr_len ?
+        rte_pktmbuf_data_len(m) - hdr_len : 0;
     // mid-data
     mark_t mark_array[32];
     search_px_result_t as_px_result;
@@ -31,7 +35,7 @@ process_ann_packet(struct rte_mbuf *m, uint8_t portid, struct lcore_conf *qconf)
     void *new_ann_array[32];
 
     // ANN stage 1 : parse and mark ANN format
-    int parse_result = rm_ANN_parse_store(pkt_data, mark_array, &as_px_result);
+    int parse_result = rm_ANN_parse_store(pkt_data, avail_len, mark_array, &as_px_result);
     if(RM_PROCESS_SUCCESS != parse_result)
     {
         rm_metrics_record_result(RM_PACKET_ANN, ann_metric_result(parse_result));
@@ -50,8 +54,11 @@ process_ann_packet(struct rte_mbuf *m, uint8_t portid, struct lcore_conf *qconf)
     }
 
     // ANN stage 3 :
+    // 转出的 ANN 不会比收到的长：单元只会被过滤、字段只会被省略、放不下的策略被丢掉，
+    // 只多出一个 PX。所以按 pkg_len + 2 分配一定够（pkg_len 已在 stage 1 校验过）
+    uint32_t fwd_ann_size = (uint32_t)((ANN_front_t *)pkt_data)->pkg_len + 2;
     for(int i = 0; i < num_px_units; i++) {
-        new_ann_array[i] = rte_malloc(NULL, 256, 0);
+        new_ann_array[i] = rte_malloc(NULL, fwd_ann_size, 0);
         if (new_ann_array[i] == NULL) {
             for (int j = 0; j < i; j++)
                 rte_free(new_ann_array[j]);

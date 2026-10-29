@@ -103,7 +103,7 @@ FTP（21）、MySQL（3306）、RTP（udp 5004）。ACL 规则加在 RM 1-1（`1
 - `run-rm.sh` 用 `-l 1,2`：**主 lcore 跑 CLI，另一个 lcore 跑全部收发包**（`worker_main`）。另外还有两个 pthread：
   Web（`rm_web.c:942`）和日志消费线程（`rm_log.c:403`）。所以数据面是单线程的，但 CLI、Web 会和数据面并发读写同一批表。
 - 工作区 `core.autocrlf=true`，仓库里存的是 LF。如果绕过 git 直接把工作区文件拷到 Linux，`*.sh` 会带上 CRLF，跑不起来。
-- 单元测试：`meson test -C build`（`tests/` 下 metrics、log、monitor 三个）；`bash tests/web_smoke.sh` 测 Web 接口；
+- 单元测试：`meson test -C build`（`tests/` 下 metrics、log、monitor、ann-format 四个）；`bash tests/web_smoke.sh` 测 Web 接口；
   `tests/scapy/` 里是 scapy 发包脚本（从另一台机器往 RM 网卡打 ANN/ARP/DATA，脚本里写死了网卡名和 MAC）。
 
 ### 4.2 收包到处理

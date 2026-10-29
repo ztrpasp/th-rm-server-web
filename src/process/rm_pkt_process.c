@@ -121,12 +121,32 @@ rm_ANN_check_filter(ANN_front_t *head, mark_t *info_mark)
 }
 
 // parse ANN and store , mark ann_unit, ret number of ANN_unit
+// avail_len: CoLoR 头起 mbuf 里实际收到的字节数
 int
-rm_ANN_parse_store(void *pkt, mark_t *mark_array, search_px_result_t *src_px_res)
+rm_ANN_parse_store(void *pkt, uint32_t avail_len, mark_t *mark_array, search_px_result_t *src_px_res)
 {
     if(!pkt || !mark_array || !src_px_res)
         return RM_ERR_NULL_PT_INPUT;
-    
+
+    // 先整包校验长度和边界，再算校验和、解析：任何一处越界就丢弃整个 ANN，
+    // 这样不会出现前几个单元已经存表、后面的单元才发现越界的情况
+    ANN_format_info_t format_info;
+    int format_check = ANN_check_format(pkt, avail_len, &format_info);
+    if(format_check != ANN_FORMAT_OK)
+    {
+        RM_LOG_WARN(RM_LOG_MODULE_ANN, RM_EVENT_PACKET_MALFORMED,
+            RM_LOG_PORT_NONE, "malformed ANN dropped: %s",
+            ANN_format_error_str(format_check));
+        return RM_ERR_MALFORMED;
+    }
+    if(format_info.len_mismatch != 0 || format_info.trailing != 0)
+    {
+        RM_LOG_WARN(RM_LOG_MODULE_ANN, RM_EVENT_PACKET_MALFORMED,
+            RM_LOG_PORT_NONE,
+            "ANN accepted with %u unit_len mismatch(es), %u unparsed byte(s) before PX",
+            format_info.len_mismatch, format_info.trailing);
+    }
+
     void *pt, *N_sid, *L_sid, *nid, *value_pt;
     sid_info_t *sid_mid;
 //    br_info_t *br_mid;
@@ -265,14 +285,20 @@ rm_ANN_parse_store(void *pkt, mark_t *mark_array, search_px_result_t *src_px_res
             // insert strategy
             for(j = 0; j < strategy_count; j++)
             {
-                value_pt = (void *)rte_malloc(NULL, mark_array[i].strategy_pt[j].len, 0);
-                if (value_pt == NULL) {
-                    sid_info_destroy(sid_mid);
-                    RM_LOG_ERROR(RM_LOG_MODULE_ANN, RM_EVENT_RESOURCE_EXHAUSTED,
-                        RM_LOG_PORT_NONE, "unable to copy ANN strategy value");
-                    return RM_ERR_NO_MEMORY;
+                // len = 0 的策略存为 value = NULL：rte_malloc(0) 返回 NULL，
+                // 以前会被当成内存不足，整个 ANN 被丢弃
+                value_pt = NULL;
+                if(mark_array[i].strategy_pt[j].len > 0)
+                {
+                    value_pt = (void *)rte_malloc(NULL, mark_array[i].strategy_pt[j].len, 0);
+                    if (value_pt == NULL) {
+                        sid_info_destroy(sid_mid);
+                        RM_LOG_ERROR(RM_LOG_MODULE_ANN, RM_EVENT_RESOURCE_EXHAUSTED,
+                            RM_LOG_PORT_NONE, "unable to copy ANN strategy value");
+                        return RM_ERR_NO_MEMORY;
+                    }
+                    rte_memcpy(value_pt, mark_array[i].strategy_pt[j].value, mark_array[i].strategy_pt[j].len);
                 }
-                rte_memcpy(value_pt, mark_array[i].strategy_pt[j].value, mark_array[i].strategy_pt[j].len);
                 st = strategy_create(mark_array[i].strategy_pt[j].tag, mark_array[i].strategy_pt[j].len, value_pt);
                 if (st == NULL) {
                     rte_free(value_pt);
@@ -375,22 +401,19 @@ rm_ANN_forward_px_units(void *pkt, mark_t *mark_array, search_px_result_t *src_p
         for(j = 0, un_n = 0; j < unit_count; j++)
         {
             bool unit_filter = mark_array[j].filtered;
-            
+            // strategy_pt 只有前 strategy_num 个是这次解析写进去的，后面是栈上的残留数据
+            int s_num = ((ANN_unit_front_t *)mark_array[j].unit_head)->strategy_num;
+
             // # decide if forward the unit
-            for(s_i = 0; unit_filter == false && s_i < 32; s_i++)
+            for(s_i = 0; unit_filter == false && s_i < s_num; s_i++)
             {
                 switch(mark_array[j].strategy_pt[s_i].tag)
                 {
-                    // end of Strategy
-                    case 0:
-                    {
-                        s_i = 32;
-                        break;
-                    }
                     // S1 : Security level
                     case STRATEGY_SECURITY_LEVEL:
                     {
-                        if(!global_quick_check_strategy(STRATEGY_SECURITY_LEVEL_CHECK))
+                        if(!global_quick_check_strategy(STRATEGY_SECURITY_LEVEL_CHECK) ||
+                           mark_array[j].strategy_pt[s_i].len < 1)
                             break;
                         uint8_t sl = *(uint8_t *)(mark_array[j].strategy_pt[s_i].value);
                         if(sl > as_pt->security_level)
@@ -445,7 +468,7 @@ rm_ANN_construct_ann(void *pkt, mark_t *mark_array, px_unit_t *px_units, void *a
         return RM_ERR_NULL_PT_INPUT;
     
     int i, j, k, index, num;
-    uint8_t ubuf[128];
+    uint8_t ubuf[ANN_UNIT_MAX_LEN + 1]; // 单元最长 255 字节，由 ANN_unit_append_strategy 保证
     void *apt;
     mark_t *mpt;
     ANN_front_t *ans_head, *old_head = (ANN_front_t *)pkt;
@@ -479,8 +502,14 @@ rm_ANN_construct_ann(void *pkt, mark_t *mark_array, px_unit_t *px_units, void *a
             num = ((ANN_unit_front_t *)mpt->unit_head)->strategy_num;
             for(k = 0; k < num; k++)
             {
-                ANN_unit_append_strategy(ubuf, mpt->strategy_pt[k].tag, 
-                                            mpt->strategy_pt[k].len, mpt->strategy_pt[k].value);
+                if(ANN_unit_append_strategy(ubuf, mpt->strategy_pt[k].tag,
+                        mpt->strategy_pt[k].len, mpt->strategy_pt[k].value) == 0)
+                {
+                    RM_LOG_WARN(RM_LOG_MODULE_ANN, RM_EVENT_PACKET_MALFORMED,
+                        RM_LOG_PORT_NONE,
+                        "strategy tag %u len %u not forwarded: unit would exceed %u bytes",
+                        mpt->strategy_pt[k].tag, mpt->strategy_pt[k].len, ANN_UNIT_MAX_LEN);
+                }
             }
             ANN_append_unit(apt, ubuf);
         }
@@ -602,7 +631,8 @@ rm_GET_check_filter(void *pkt, sid_info_t *search_res)
         {
             case STRATEGY_SECURITY_LEVEL:
             {
-                if(px != 0 && global_quick_check_strategy(STRATEGY_SECURITY_LEVEL_CHECK))
+                // len = 0 的安全等级没有值（value 为 NULL），忽略
+                if(px != 0 && gt->len >= 1 && global_quick_check_strategy(STRATEGY_SECURITY_LEVEL_CHECK))
                 {
                     uint8_t sid_secu = *(uint8_t *)(gt->value);
                     if(res_br.target_as->security_level < sid_secu)
