@@ -318,7 +318,15 @@ rm_ANN_parse_store(void *pkt, uint32_t avail_len, mark_t *mark_array, search_px_
             // insert into sid_table
             // ### decide the priority of forwarding
             int sid_store_insert_ret = sid_store_insert(N_sid, L_sid, sid_mid, insert_cmp);
-            if(0 > sid_store_insert_ret)
+            if(SID_STORE_UNCHANGED == sid_store_insert_ret)
+            {
+                // 同一来源重复通告、策略没变（终端周期刷新、提供端重启），是正常情况，不转发
+                RM_LOG_DEBUG(RM_LOG_MODULE_ANN, RM_EVENT_ANN_SID_UNCHANGED,
+                    RM_LOG_PORT_NONE, "SID re-announced with unchanged strategies; not forwarded");
+                sid_info_destroy(sid_mid);
+                mark_array[i].filtered = true;
+            }
+            else if(0 > sid_store_insert_ret)
             {
                 RM_LOG_ERROR(RM_LOG_MODULE_TABLE, RM_EVENT_RESOURCE_EXHAUSTED,
                     RM_LOG_PORT_NONE, "unable to insert SID entry");

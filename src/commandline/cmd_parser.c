@@ -329,22 +329,42 @@ static void parse_acl(void)
     }
 }
 
+/*
+ * 每条 SID 一行十六进制，有名称或描述时下一行接着打印。名称、描述来自终端，
+ * TSID 表里存的已经是清洗过的副本（没有控制字符），可以直接打印到终端。
+ * cli_print 一次最多 512 字节，所以名称和描述分开打印。
+ */
 static void parse_sid_list(void)
 {
-    int total = g_tsid_table.count;
+    static tsid_entry_t entry; // 单个约 550 字节，不放在栈上
+    uint32_t total = __atomic_load_n(&g_tsid_table.count, __ATOMIC_ACQUIRE);
+    bool any_unverified = false;
+
     if (total == 0) {
         cli_print("SID 列表为空\r\n");
         return;
     }
-    cli_print("========== SID 列表 (共 %d 个) ==========\r\n", total);
-    for (int i = 0; i < total; i++) {
-        cli_print("[%3d] ", i + 1);
+    cli_print("========== SID 列表 (共 %u 个) ==========\r\n", total);
+    for (uint32_t i = 0; i < total; i++) {
+        if (tsid_table_snapshot(i, &entry) != 0)
+            break;
+        cli_print("[%3u] ", i + 1);
         for (int j = 0; j < SID_LEN; j++) {
-            cli_print("%02x", g_tsid_table.sid_list[i].tsid[j]);
+            cli_print("%02x", entry.tsid[j]);
         }
         cli_print("\r\n");
+        if (entry.name_len == 0 && entry.desc_len == 0)
+            continue;
+        bool unverified = entry.name_len != 0 && !entry.name_verified;
+        cli_print("      名称: %s%s\r\n", unverified ? "? " : "",
+            entry.name_len != 0 ? entry.name : "-");
+        if (unverified)
+            any_unverified = true;
+        cli_print("      描述: %s\r\n", entry.desc_len != 0 ? entry.desc : "-");
     }
     cli_print("=========================================\r\n");
+    if (any_unverified)
+        cli_print("名称前带 ? 的未通过校验（SHA1(名称) 与 L_SID 不符），只能参考\r\n");
 }
 
 static void parse_display(void)

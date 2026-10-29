@@ -198,7 +198,8 @@
       <section class="hw-view" data-view="sid-acl">
         <section class="hw-panel">
           <div class="hw-panel-header"><h2>SID 列表</h2><div class="hw-log-summary"><strong id="sid-count">0</strong><span>个 SID</span></div></div>
-          <div class="hw-table-wrap hw-sid-wrap"><table><thead><tr><th>序号</th><th>SID (hex)</th></tr></thead><tbody id="sid-body"><tr><td colspan="2" class="empty">等待数据</td></tr></tbody></table></div>
+          <p class="hw-sid-hint">名称是提供端通告的 L_SID 哈希原文，RM 校验过 SHA1(名称) = L_SID；标「未校验」的对不上，只能参考。描述由提供端自报。点击一行可把 SID 填入下方 ACL 表单。</p>
+          <div class="hw-table-wrap hw-sid-wrap"><table><thead><tr><th>序号</th><th>SID (hex)</th><th>名称</th><th>描述</th></tr></thead><tbody id="sid-body"><tr><td colspan="4" class="empty">等待数据</td></tr></tbody></table></div>
         </section>
         <section class="hw-panel">
           <div class="hw-panel-header"><h2>ACL 访问控制规则</h2><div class="hw-log-summary"><strong id="acl-count">0</strong><span>条规则</span></div></div>

@@ -499,6 +499,11 @@ body.sidebar-collapsed .hw-main { margin-left: 68px; }
 .hw-sid-wrap thead th { position: sticky; top: 0; z-index: 1; }
 
 .hw-acl-sid { word-break: break-all; white-space: normal !important; min-width: 240px; }
+.hw-sid-hint { margin: 0 0 12px; font-size: 12px; color: var(--hw-text-secondary); }
+.hw-sid-row { cursor: pointer; }
+.hw-sid-text { white-space: normal !important; overflow-wrap: anywhere; min-width: 120px; }
+.hw-sid-name { margin-top: 4px; color: var(--hw-text-secondary); word-break: normal; overflow-wrap: anywhere; }
+.hw-sid-badge { margin-left: 6px; vertical-align: 1px; }
 
 .hw-acl-hits { font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--hw-text-secondary); }
 

@@ -31,7 +31,11 @@
 #define RM_WEB_DEFAULT_PORT 8080U
 #define RM_WEB_DEFAULT_ROOT "./web"
 #define RM_WEB_REQUEST_SIZE 8192U
-#define RM_WEB_RESPONSE_SIZE (256U * 1024U)
+/*
+ * 每个请求 malloc 一块。最大的是 /api/v1/sids：1024 条 SID，每条带最长 255 字节的名称和描述，
+ * 转义后最坏约 1.2 KB 一条，所以给 2 MB。
+ */
+#define RM_WEB_RESPONSE_SIZE (2U * 1024U * 1024U)
 #define RM_WEB_ASSET_SIZE (512U * 1024U)
 #define RM_WEB_BACKLOG 16
 #define RM_WEB_BODY_MAX 4096U
@@ -162,6 +166,44 @@ append_format(char *out, size_t capacity, size_t *length, const char *format, ..
         return -1;
     *length += (size_t)written;
     return 0;
+}
+
+static int
+append_char(char *out, size_t capacity, size_t *length, char c)
+{
+    if (*length + 1 >= capacity)
+        return -1;
+    out[(*length)++] = c;
+    out[*length] = '\0';
+    return 0;
+}
+
+/* 追加一个带引号的 JSON 字符串，转义 '"'、'\' 和全部控制字符 */
+static int
+append_json_string(char *out, size_t capacity, size_t *length, const char *text)
+{
+    static const char digits[] = "0123456789abcdef";
+    const unsigned char *p;
+
+    if (append_char(out, capacity, length, '"') != 0)
+        return -1;
+    for (p = (const unsigned char *)text; *p != '\0'; p++) {
+        int ret;
+
+        if (*p == '"' || *p == '\\') {
+            ret = append_char(out, capacity, length, '\\');
+            if (ret == 0)
+                ret = append_char(out, capacity, length, (char)*p);
+        } else if (*p < 0x20) {
+            char escaped[7] = { '\\', 'u', '0', '0', digits[*p >> 4], digits[*p & 0x0f], '\0' };
+            ret = append_format(out, capacity, length, "%s", escaped);
+        } else {
+            ret = append_char(out, capacity, length, (char)*p);
+        }
+        if (ret != 0)
+            return -1;
+    }
+    return append_char(out, capacity, length, '"');
 }
 
 static uint64_t
@@ -491,21 +533,37 @@ build_health(char *body, size_t capacity, size_t *body_length)
     return 200;
 }
 
+/*
+ * {"count":N,"sids":[{"sid":"<72 位 hex>","name":"…","name_verified":true,"desc":"…"}]}
+ * 名称、描述来自终端，是不可信输入：TSID 表里存的已经是清洗过的副本，这里再做 JSON 转义。
+ * 没有名称或描述时为空串；没有名称时 name_verified 为 false。
+ */
 static int
 build_sid_list(char *body, size_t capacity, size_t *body_length)
 {
+    tsid_entry_t entry;
+    uint32_t count = __atomic_load_n(&g_tsid_table.count, __ATOMIC_ACQUIRE);
     uint32_t i;
 
+    if (count > MAX_SID_NUM)
+        count = MAX_SID_NUM;
     *body_length = 0;
     if (append_format(body, capacity, body_length, "{\"count\":%u,\"sids\":[",
-        g_tsid_table.count) != 0)
+        count) != 0)
         return 500;
-    for (i = 0; i < g_tsid_table.count && i < MAX_SID_NUM; i++) {
+    for (i = 0; i < count; i++) {
         char hex[SID_LEN * 2 + 1];
 
-        write_hex(hex, sizeof(hex), g_tsid_table.sid_list[i].tsid, SID_LEN);
-        if (append_format(body, capacity, body_length, "%s\"%s\"",
-            i != 0 ? "," : "", hex) != 0)
+        if (tsid_table_snapshot(i, &entry) != 0)
+            return 500;
+        write_hex(hex, sizeof(hex), entry.tsid, SID_LEN);
+        if (append_format(body, capacity, body_length,
+                "%s{\"sid\":\"%s\",\"name\":", i != 0 ? "," : "", hex) != 0 ||
+            append_json_string(body, capacity, body_length, entry.name) != 0 ||
+            append_format(body, capacity, body_length, ",\"name_verified\":%s,\"desc\":",
+                entry.name_verified ? "true" : "false") != 0 ||
+            append_json_string(body, capacity, body_length, entry.desc) != 0 ||
+            append_char(body, capacity, body_length, '}') != 0)
             return 500;
     }
     if (append_format(body, capacity, body_length, "]}") != 0)

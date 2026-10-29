@@ -2,9 +2,11 @@ vendor_inc = include_directories('../../include')
 
 vendor_sources = files(
     'cuckoo_hash.c',
+    'display_text.c',
     'jsw_rbtree.c',
     'lookup3.c',
     'rte_array.c',
+    'sha1.c',
     'utils.c'
 )
 

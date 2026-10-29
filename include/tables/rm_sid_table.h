@@ -18,8 +18,21 @@
 #define SID_LEN 36
 #define MAX_SID_NUM 1024
 
+// 名称、描述展示副本的最大长度：策略单元的 len 只有 1 字节
+#define TSID_TEXT_MAX 255
+
+/*
+ * TSID 表的一条。数据面（worker lcore）写，Web 线程和 CLI 读，没有锁：
+ * 读方一律用 tsid_table_snapshot 复制一份再用。名称和描述是展示用副本，
+ * 已经过 display_text_copy 清洗（没有控制字符、是合法 UTF-8），以 NUL 结尾。
+ */
 typedef struct {
     uint8_t tsid[SID_LEN];
+    uint8_t name_len;       // 0 表示通告里没有名称
+    uint8_t desc_len;       // 0 表示通告里没有描述
+    uint8_t name_verified;  // 1：SHA1(名称) == L_SID
+    char name[TSID_TEXT_MAX + 1];
+    char desc[TSID_TEXT_MAX + 1];
 } tsid_entry_t;
 
 typedef struct {
@@ -64,12 +77,16 @@ strategy_t *strategy_create(uint8_t t, uint8_t l, uint8_t *v);
 int sid_add_strategy(sid_info_t *ans, strategy_t *tar);
 int sid_info_destroy(sid_info_t *st);
 
+// sid_store_insert 的返回值：同一来源、策略没变（例如终端周期刷新），什么都没做，不是错误
+#define SID_STORE_UNCHANGED (-2)
+
 int sid_store_insert(uint8_t *N_sid, uint8_t *L_sid, sid_info_t *info_node,
                     int cmp(sid_info_t *x, sid_info_t *y));
 sid_table_node_t *sid_store_search(uint8_t *n_sid, uint8_t *l_sid);
 
 int tsid_table_init();
 int tsid_table_add(const uint8_t *new_sid);
+int tsid_table_snapshot(uint32_t index, tsid_entry_t *out);
 
 
 #endif

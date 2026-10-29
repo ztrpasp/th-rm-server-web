@@ -405,7 +405,69 @@
     message.classList.toggle("is-error", !ok);
   }
 
-  function renderAclTable(acls) {
+  // 原样显示的文本（SID/NID 的 hex、名称、描述）：不能走 displayValue，
+  // 否则全是数字的 hex 会被当成整数加千分位
+  function appendTextCell(row, text, className) {
+    const cell = document.createElement("td");
+    cell.textContent = text ? String(text) : "—";
+    if (className) cell.className = className;
+    row.appendChild(cell);
+    return cell;
+  }
+
+  // 名称与描述来自终端（不可信），一律用 textContent 写入
+  function appendNameCell(row, info) {
+    const cell = document.createElement("td");
+    cell.className = "hw-sid-text";
+    if (!info || !info.name) {
+      cell.textContent = "—";
+    } else {
+      cell.textContent = info.name;
+      if (!info.name_verified) {
+        const badge = document.createElement("span");
+        badge.className = "level level-warn hw-sid-badge";
+        badge.textContent = "未校验";
+        badge.title = "SHA1(名称) 与 L_SID 不符，名称只能参考";
+        cell.appendChild(badge);
+      }
+    }
+    row.appendChild(cell);
+  }
+
+  function fillAclSid(sid) {
+    const input = $("acl-new-sid");
+    input.value = sid;
+    input.focus();
+    showAclMessage("已把 SID 填入添加规则表单", true);
+  }
+
+  function renderSidTable(sids) {
+    const body = $("sid-body");
+    body.replaceChildren();
+    if (!sids.length) {
+      const row = document.createElement("tr");
+      const cell = document.createElement("td");
+      cell.colSpan = 4;
+      cell.className = "empty";
+      cell.textContent = "SID 列表为空";
+      row.appendChild(cell);
+      body.appendChild(row);
+      return;
+    }
+    sids.forEach((info, index) => {
+      const row = document.createElement("tr");
+      row.className = "hw-sid-row";
+      row.title = "点击填入下方 ACL 表单";
+      appendCell(row, index + 1);
+      appendTextCell(row, info.sid, "hw-acl-sid");
+      appendNameCell(row, info);
+      appendTextCell(row, info.desc, "hw-sid-text");
+      row.addEventListener("click", () => fillAclSid(info.sid));
+      body.appendChild(row);
+    });
+  }
+
+  function renderAclTable(acls, sidInfo) {
     const body = $("acl-body");
     body.replaceChildren();
     if (!acls.length) {
@@ -428,15 +490,22 @@
       badge.textContent = action || "unknown";
       actionCell.appendChild(badge);
       row.appendChild(actionCell);
-      const sidCell = document.createElement("td");
-      sidCell.className = "hw-acl-sid";
-      sidCell.textContent = displayValue(rule.sid);
-      row.appendChild(sidCell);
+      const sidCell = appendTextCell(row, rule.sid, "hw-acl-sid");
+      const info = sidInfo.get(String(rule.sid || "").toLowerCase());
+      if (info && (info.name || info.desc)) {
+        const nameLine = document.createElement("div");
+        nameLine.className = "hw-sid-name";
+        nameLine.textContent = [info.name, info.desc].filter(Boolean).join(" · ");
+        if (info.name && !info.name_verified) {
+          const badge = document.createElement("span");
+          badge.className = "level level-warn hw-sid-badge";
+          badge.textContent = "未校验";
+          nameLine.appendChild(badge);
+        }
+        sidCell.appendChild(nameLine);
+      }
       appendCell(row, rule.asid);
-      const nidCell = document.createElement("td");
-      nidCell.className = "hw-acl-sid";
-      nidCell.textContent = rule.nid_wildcard ? "任意 (通配)" : displayValue(rule.nid);
-      row.appendChild(nidCell);
+      appendTextCell(row, rule.nid_wildcard ? "任意 (通配)" : rule.nid, "hw-acl-sid");
       const hitsCell = document.createElement("td");
       hitsCell.className = "hw-acl-hits";
       hitsCell.textContent =
@@ -458,16 +527,18 @@
     const [sidData, aclData] = await Promise.all([
       json("/api/v1/sids"), json("/api/v1/acls")
     ]);
-    const sids = Array.isArray(sidData.sids) ? sidData.sids : [];
+    // 每条是 {sid, name, name_verified, desc}；兼容旧版 RM 只返回 SID 字符串
+    const sids = (Array.isArray(sidData.sids) ? sidData.sids : [])
+      .map((item) => (typeof item === "string" ? { sid: item } : item))
+      .filter((item) => item && typeof item.sid === "string");
     $("sid-count").textContent =
       displayValue(sidData.count === undefined ? sids.length : sidData.count);
-    renderTable($("sid-body").closest("table").tHead, $("sid-body"),
-      [{ label: "序号" }, { label: "SID (hex)" }],
-      sids.map((sid, index) => [index + 1, sid]), "SID 列表为空");
+    renderSidTable(sids);
+    const sidInfo = new Map(sids.map((item) => [item.sid.toLowerCase(), item]));
     const acls = Array.isArray(aclData.acls) ? aclData.acls : [];
     $("acl-count").textContent =
       displayValue(aclData.count === undefined ? acls.length : aclData.count);
-    renderAclTable(acls);
+    renderAclTable(acls, sidInfo);
   }
 
   async function addAcl(event) {

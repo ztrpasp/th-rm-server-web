@@ -204,6 +204,9 @@ typedef struct CONTROL_front CONTROL_front_t;
 #define STRATEGY_TRACE_EVERY_PKG 10
 #define STRATEGY_ANN_PATH_DEFAULT 11
 #define STRATEGY_ANN_PATH_STP 12
+// 随 ANN 携带，见 docs/design-ann-sid-desc.md。tag 号与上面的开关共用，新增的不要超过 30
+#define STRATEGY_SID_NAME 13 // SID 名称：L_SID 的哈希原文，SHA1(名称) == L_SID
+#define STRATEGY_SID_DESC 14 // SID 描述：协议/服务名，只用于展示
 
 // ack
 #define ACK_SUCCESS 1

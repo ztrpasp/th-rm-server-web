@@ -54,6 +54,10 @@ run-rm.sh # 运行RM，需要关闭RM软件时按Ctrl+C退出
 运行期间可使用 `display status` 查看 ANN、GET 和 Proxy 的累计统计。统计从零开始，
 内部使用 64 位计数器；原有 CONTROL 状态响应继续保留 32 位兼容格式。
 
+`display sid` 列出全部 SID。提供端在 ANN 里带了名称（策略 tag 13）和描述（tag 14）时一并显示：
+名称是 L_SID 的哈希原文，RM 会校验 SHA1(名称) = L_SID，对不上的名称前面标 `?`，只能参考；
+描述是提供端自报的协议名，只用于展示。格式见 `docs/design-ann-sid-desc.md`。
+
 RM 的运行事件会异步写入结构化日志，默认文件为当前目录下的 `rm.log`。单个日志文件
 达到 10 MiB 后自动轮转，最多保留 5 个历史文件。可以在启动前通过以下环境变量调整：
 
@@ -104,7 +108,7 @@ RM_WEB_ROOT=./web            # Dashboard 静态资源目录
 GET /api/v1/health                 服务健康状态
 GET /api/v1/metrics                JSON 运行指标、端口状态和日志统计
 GET /api/v1/logs?after=0&limit=100 JSON 增量日志，limit 最大 256
-GET /api/v1/sids                   JSON 系统全部 SID 列表
+GET /api/v1/sids                   JSON 系统全部 SID 列表，每条含 sid、name、name_verified、desc
 GET /api/v1/acls                   JSON 当前 ACL 规则列表
 POST /api/v1/acls                  添加 ACL 规则，JSON 体 {id, action, sid, asid, nid}
 DELETE /api/v1/acls?id=N           删除指定 ID 的 ACL 规则

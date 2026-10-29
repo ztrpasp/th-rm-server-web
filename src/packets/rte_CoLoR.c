@@ -1,6 +1,7 @@
 #include "packets/rte_CoLoR.h"
 #include "commandline/cli.h"
 #include "telemetry/rm_log.h"
+#include "vendor/display_text.h"
 
 static void show_ANN(uint8_t *buf);
 static void show_GET(uint8_t *buf);
@@ -630,12 +631,23 @@ show_ANN(uint8_t *buf)
 		// show strategies in unit
 		for(j=0; j < unit_pt->strategy_num; j++)
 		{
+			uint8_t s_tag = *(uint8_t *)(buf + offset);
 			s_len = *(uint8_t *)(buf + offset + 1);
 			cli_print("\t\t-S_UNIT:\n\t\t\ttag: %d\n\t\t\tlen: %d\n" ,
-					*(uint8_t *)(buf + offset),
+					s_tag,
 					s_len);
-			cli_print("\t\t\tvalue: ");
-			show_segment(buf + offset + 2, s_len);
+			if(s_tag == STRATEGY_SID_NAME || s_tag == STRATEGY_SID_DESC)
+			{
+				// 名称、描述按文本打印；来自终端，先清洗掉控制字符再写到终端
+				char text[256];
+				display_text_copy(text, sizeof(text), buf + offset + 2, s_len);
+				cli_print("\t\t\ttext: %s\n", text);
+			}
+			else
+			{
+				cli_print("\t\t\tvalue: ");
+				show_segment(buf + offset + 2, s_len);
+			}
 			offset += 2 + s_len;
 		}
 	}

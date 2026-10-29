@@ -1,7 +1,14 @@
+#include <stdbool.h>
+
 #include "tables/rm_sid_table.h"
 #include "tables/rm_tables.h"
+#include "packets/rte_CoLoR.h"
 #include "telemetry/rm_log.h"
+#include "vendor/display_text.h"
+#include "vendor/sha1.h"
 
+static void tsid_table_record(const uint8_t *N_sid, const uint8_t *L_sid,
+    const sid_info_t *info, bool add);
 
 // functions of SID 
 sid_info_t *
@@ -106,7 +113,7 @@ check_same_strategy(sid_info_t *a, sid_info_t *b)
 
 /*
  * 返回 1：已插入或已替换策略，需要转发；0：已插入，不转发；
- * -2：同一来源、策略相同，什么都没做；-1：失败。
+ * SID_STORE_UNCHANGED（-2）：同一来源、策略相同，什么都没做；-1：失败。
  * 返回值 >= 0 时 info_node 归表所有（挂进链表，或策略数组被取走后释放），调用方不能再用；
  * 返回负数时 info_node 仍归调用方，由调用方释放。
  */
@@ -161,10 +168,8 @@ sid_store_insert(uint8_t *N_sid, uint8_t *L_sid, sid_info_t *info_node,
     // new registered
     if(check_pt == NULL)
     {
-        if(N_sid && L_sid)//如果两个都有，我们就要把它添加到TSID总表之中，这里的N_sid和L_sid都是指向数据包缓冲区的指针，按照解析顺序先N，所以从N指针开始往后读36个字节就可以把N和L都拷贝进来
-        {
-            (void)tsid_table_add(N_sid);
-        }
+        // N、L 都有的 SID 加进 TSID 总表（给 Web/CLI/tag 40 用），并记下名称和描述
+        tsid_table_record(N_sid, L_sid, info_node, true);
         head->sid_info_list = info_node;
         return 1;
     }
@@ -172,6 +177,7 @@ sid_store_insert(uint8_t *N_sid, uint8_t *L_sid, sid_info_t *info_node,
     else if(check_pt != CUCKOO_HASH_FAILED)
     {
         sid_info_t *p_npt = NULL, *npt = NULL;
+        sid_info_t *stored = info_node; // 这次存进表、要据此更新 TSID 名称和描述的节点
         rte_free(head);
         int fwd_flag = 0;
         for(npt = ((sid_table_node_t *)(check_pt->value))->sid_info_list;;)
@@ -221,7 +227,7 @@ sid_store_insert(uint8_t *N_sid, uint8_t *L_sid, sid_info_t *info_node,
            if(check_same_sid_node(info_node, npt))
            {
                if(check_same_strategy(info_node, npt)){
-                   return -2;
+                   return SID_STORE_UNCHANGED;
                }
                // 换上新的策略数组：旧数组连同每个 value 一起释放；
                // info_node 只用来带新策略，不进链表，取走数组后释放
@@ -229,6 +235,7 @@ sid_store_insert(uint8_t *N_sid, uint8_t *L_sid, sid_info_t *info_node,
                rte_array_destroy(npt->strategy_array);
                npt->strategy_array = info_node->strategy_array;
                rte_free(info_node);
+               stored = npt;
                fwd_flag = 1;
                break;
            }
@@ -265,6 +272,8 @@ sid_store_insert(uint8_t *N_sid, uint8_t *L_sid, sid_info_t *info_node,
            }
 
         }
+        // 名称、描述以最近一次存进表的通告为准
+        tsid_table_record(N_sid, L_sid, stored, false);
         //return 2;
         return fwd_flag;
     }
@@ -332,8 +341,126 @@ int tsid_table_add(const uint8_t *new_sid)
         return -1;
     }
 
-    //添加
-    memcpy(g_tsid_table.sid_list[g_tsid_table.count].tsid, new_sid, SID_LEN);
-    g_tsid_table.count++;
+    //添加：先把整条写好，再让 count 加 1，Web/CLI 看到新的 count 时这条已经完整
+    tsid_entry_t *entry = &g_tsid_table.sid_list[g_tsid_table.count];
+    memcpy(entry->tsid, new_sid, SID_LEN);
+    entry->name_len = 0;
+    entry->desc_len = 0;
+    entry->name_verified = 0;
+    entry->name[0] = '\0';
+    entry->desc[0] = '\0';
+    __atomic_store_n(&g_tsid_table.count, g_tsid_table.count + 1, __ATOMIC_RELEASE);
     return 1;
+}
+
+static int
+tsid_table_find(const uint8_t *sid)
+{
+    for(uint32_t i = 0; i < g_tsid_table.count; i++)
+    {
+        if(sid_equal(g_tsid_table.sid_list[i].tsid, sid))
+            return (int)i;
+    }
+    return -1;
+}
+
+// 写一段展示文本：先写内容，最后写长度（读方按长度取，见 tsid_table_snapshot）
+static void
+tsid_text_store(char *dst, uint8_t *len_field, const strategy_t *st)
+{
+    size_t n = display_text_copy(dst, TSID_TEXT_MAX + 1,
+        st != NULL ? st->value : NULL, st != NULL ? st->len : 0);
+    __atomic_store_n(len_field, (uint8_t)n, __ATOMIC_RELEASE);
+}
+
+/*
+ * 从 info 的策略里取 SID 名称（tag 13）和描述（tag 14），更新 TSID 表里这个 SID 的展示副本。
+ * - 名称要满足 SHA1(名称) == L_SID 才算已校验；不满足只记 warn，照样展示，标成未校验；
+ * - 同一种 tag 出现多次时取第一个，记 warn；
+ * - 通告里没有的字段清空：以最近一次存进表的通告为准。
+ * 只处理 N、L 都有的 SID（TSID 表只收这种）。add 为 true 时先把 SID 加进 TSID 表。
+ */
+static void
+tsid_table_record(const uint8_t *N_sid, const uint8_t *L_sid,
+    const sid_info_t *info, bool add)
+{
+    uint8_t sid[SID_LEN];
+    const strategy_t *name = NULL, *desc = NULL;
+    bool duplicated = false;
+    uint8_t verified = 0;
+    int index;
+
+    if(N_sid == NULL || L_sid == NULL || info == NULL || info->strategy_array == NULL)
+        return;
+    memcpy(sid, N_sid, COLOR_N_SID_LEN);
+    memcpy(sid + COLOR_N_SID_LEN, L_sid, COLOR_L_SID_LEN);
+    if(add)
+        (void)tsid_table_add(sid);
+    if((index = tsid_table_find(sid)) < 0)
+        return; // TSID 表满了，没加进去
+
+    rte_array_t *arr = info->strategy_array;
+    for(int i = 0; i < arr->count; i++)
+    {
+        const strategy_t *st = (const strategy_t *)((uint8_t *)arr->data + i * arr->element_size);
+        const strategy_t **slot = st->tag == STRATEGY_SID_NAME ? &name :
+            (st->tag == STRATEGY_SID_DESC ? &desc : NULL);
+        if(slot == NULL)
+            continue;
+        if(*slot != NULL)
+            duplicated = true;
+        else
+            *slot = st;
+    }
+    if(duplicated)
+        RM_LOG_WARN(RM_LOG_MODULE_ANN, RM_EVENT_PACKET_MALFORMED, RM_LOG_PORT_NONE,
+            "ANN unit carries SID name or description more than once; using the first");
+
+    if(name != NULL && name->len > 0)
+    {
+        uint8_t digest[RM_SHA1_DIGEST_LEN];
+        rm_sha1(name->value, name->len, digest);
+        verified = memcmp(digest, L_sid, COLOR_L_SID_LEN) == 0;
+        if(!verified)
+            RM_LOG_WARN(RM_LOG_MODULE_ANN, RM_EVENT_ANN_NAME_UNVERIFIED, RM_LOG_PORT_NONE,
+                "SID name does not hash to L-SID %02x%02x%02x%02x...; shown as unverified",
+                L_sid[0], L_sid[1], L_sid[2], L_sid[3]);
+    }
+
+    tsid_entry_t *entry = &g_tsid_table.sid_list[index];
+    tsid_text_store(entry->name, &entry->name_len, name);
+    tsid_text_store(entry->desc, &entry->desc_len, desc);
+    __atomic_store_n(&entry->name_verified, verified, __ATOMIC_RELEASE);
+}
+
+static void
+tsid_text_load(char *dst, uint8_t *dst_len, const char *src, const uint8_t *src_len)
+{
+    size_t n = __atomic_load_n(src_len, __ATOMIC_ACQUIRE); // uint8_t，不会超过 TSID_TEXT_MAX
+    memcpy(dst, src, n);
+    dst[n] = '\0';
+    *dst_len = (uint8_t)strnlen(dst, n);
+}
+
+/*
+ * 把 TSID 表第 index 条复制到 out，给 Web 线程和 CLI 用。成功返回 0，下标越界返回 -1。
+ * 数据面可能正在改这一条：复制出来的名称、描述最坏是新旧内容混在一起，
+ * 但一定以 NUL 结尾、不会越界。这些字段只用于展示，不参与任何判定。
+ */
+int
+tsid_table_snapshot(uint32_t index, tsid_entry_t *out)
+{
+    if(out == NULL)
+        return -1;
+    uint32_t count = __atomic_load_n(&g_tsid_table.count, __ATOMIC_ACQUIRE);
+    if(index >= count || index >= MAX_SID_NUM)
+        return -1;
+
+    const tsid_entry_t *entry = &g_tsid_table.sid_list[index];
+    memcpy(out->tsid, entry->tsid, SID_LEN);
+    tsid_text_load(out->name, &out->name_len, entry->name, &entry->name_len);
+    tsid_text_load(out->desc, &out->desc_len, entry->desc, &entry->desc_len);
+    out->name_verified = out->name_len > 0 &&
+        __atomic_load_n(&entry->name_verified, __ATOMIC_ACQUIRE);
+    return 0;
 }
