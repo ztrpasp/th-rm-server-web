@@ -41,6 +41,8 @@ set-rm.sh # 每次开机的时候，执行一次这个脚本，帮您自动配�
 run-rm.sh # 运行RM，需要关闭RM软件时按Ctrl+C退出
 ```
 
+编译选项 `idle_sleep_us`（`meson_options.txt`，默认 0）：worker 连续空转若干轮后睡这么多微秒。真机保持 0（忙轮询，与原来一样）；容器实验环境（color-lab）用 `meson setup build -Didle_sleep_us=50`，让空闲的 RM 不占满 CPU，代价是空闲后第一个包多几十微秒时延。
+
 ## 二、RM的使用
 
 每次开机/重启设备时，执行```set-rm.sh```脚本。

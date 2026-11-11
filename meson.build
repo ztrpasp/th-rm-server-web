@@ -13,6 +13,8 @@ dpdk_dep = dependency('libdpdk', required: true,
 method:'pkg-config',static:true)
 threads_dep = dependency('threads')
 
+add_project_arguments('-DRM_IDLE_SLEEP_US=' + get_option('idle_sleep_us').to_string(), language : 'c')
+
 link_args = ['-static']
 
 # 所有的头文件都放在include文件夹下

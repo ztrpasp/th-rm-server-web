@@ -1,0 +1,2 @@
+option('idle_sleep_us', type : 'integer', min : 0, value : 0,
+       description : 'Sleep this many microseconds when the worker polls idle (0 = busy polling, as on physical RMs)')

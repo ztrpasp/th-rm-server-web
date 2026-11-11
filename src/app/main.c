@@ -33,6 +33,15 @@
 #include "telemetry/rm_metrics.h"
 #include "telemetry/rm_web.h"
 
+/* Idle sleep (meson option idle_sleep_us, default 0 = pure busy polling as on
+ * the physical deployment). When > 0, the worker sleeps that many microseconds
+ * after RM_IDLE_SPIN_ROUNDS consecutive empty polls, so idle RMs in the
+ * container lab do not keep a whole CPU at 100%. */
+#ifndef RM_IDLE_SLEEP_US
+#define RM_IDLE_SLEEP_US 0
+#endif
+#define RM_IDLE_SPIN_ROUNDS 64
+
 #define MEMPOOL_NAME "MBUF_POOL"
 #define NB_MBUF 8192
 
@@ -135,8 +144,14 @@ worker_main(__attribute__((unused)) void *arg) {
 
     cur_tsc = rte_rdtsc();
 	prev_tsc = cur_tsc;
+#if RM_IDLE_SLEEP_US > 0
+    unsigned idle_rounds = 0;
+#endif
 
     while (!atomic_load_explicit(&force_quit, memory_order_acquire)) {
+#if RM_IDLE_SLEEP_US > 0
+        bool got_packets = false;
+#endif
     	/* 清空TX队列(发包) */
         diff_tsc = cur_tsc - prev_tsc;
         if(unlikely(diff_tsc > drain_tsc)) {
@@ -157,6 +172,9 @@ worker_main(__attribute__((unused)) void *arg) {
 			nb_rx = rte_eth_rx_burst(portid, queueid, pkts_burst,
 				MAX_PKT_BURST);
             if (nb_rx == 0) continue;
+#if RM_IDLE_SLEEP_US > 0
+            got_packets = true;
+#endif
 #ifdef DEBUG_PRINT_IP_HEADER
 			/* print ip header */
 			for (int j = 0; j < nb_rx; j++) {
@@ -183,6 +201,13 @@ worker_main(__attribute__((unused)) void *arg) {
 #endif
         rm_process_packets(nb_rx, pkts_burst, portid, qconf);
         }
+#if RM_IDLE_SLEEP_US > 0
+        if (got_packets) {
+            idle_rounds = 0;
+        } else if (++idle_rounds >= RM_IDLE_SPIN_ROUNDS) {
+            rte_delay_us_sleep(RM_IDLE_SLEEP_US);
+        }
+#endif
         cur_tsc = rte_rdtsc();
     }
 
