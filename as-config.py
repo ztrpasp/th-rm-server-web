@@ -236,16 +236,20 @@ def the_new_color_as1_config():
 def the_new_color_as2_config():
     rm2_nid = 0x00000000000000021111111111111111.to_bytes(16, byteorder="big", signed=False)
     br21_nid = 0x00000000000000022222222222222222.to_bytes(16, byteorder="big", signed=False)
+    br24_nid = 0x00000000000000022222222222222222.to_bytes(16, byteorder="big", signed=False)
     pkt = IP(src="172.10.0.5", dst="172.10.0.2", proto=TrafficGen.COLOR_PROTO) / CONTROL() / ConfigRM(
         nid=rm2_nid, as_id=2, sl=7, sk=0x12340002, 
         br_desc=[
             BRDescription(br_id=1, nid=br21_nid, ip_addr="172.10.0.1"),
+            BRDescription(br_id=2, nid=br24_nid, ip_addr="172.10.0.1"),
         ],
         as_desc=[
-            ASDescription(as_id=2, sl=7),
+            ASDescription(as_id=1, sl=7),
+            ASDescription(as_id=4, sl=7),
         ], 
         px_desc=[
             InterdomainPathDescription(as_id=1, br_id=1, prefix_len=16, prefix=0x10000000),
+            InterdomainPathDescription(as_id=4, br_id=2, prefix_len=16, prefix=0x24000000),
         ])
     return pkt
 
